@@ -1,4 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
+import AssistantWidget from './agent/AssistantWidget'
+import type { AgentContext } from './agent/types'
 
 const API = import.meta.env.VITE_API_URL || '/api'
 const TOKEN_KEY = 'tasrih_token'
@@ -44,6 +46,7 @@ type Invoice = {
   amount_ttc?: number | null
   stamp_duty?: number | null
   vat_rate?: number | null
+  category_guess?: string | null
   confidence: number
   warnings: string[]
 }
@@ -180,6 +183,20 @@ export default function App() {
   const [filled, setFilled] = useState<Filled | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [spotlight, setSpotlight] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!spotlight) return
+    const el = document.querySelector(`[data-spotlight="${spotlight}"]`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.add('spotlight')
+    const timer = window.setTimeout(() => {
+      el.classList.remove('spotlight')
+      setSpotlight(null)
+    }, 2800)
+    return () => window.clearTimeout(timer)
+  }, [spotlight])
 
   const loggedIn = Boolean(token && user)
 
@@ -208,6 +225,24 @@ export default function App() {
     [year, month, cif, rne, invoices, answers, profileDraft, onboarding.has_personnel],
   )
 
+  const agentStep = loggedIn ? step : 0
+  const agentContext = useMemo<AgentContext>(
+    () => ({
+      step: agentStep,
+      q_index: agentStep === 1 ? qIndex : null,
+      profile: profileDraft,
+      cif: cif as Record<string, unknown> | null,
+      rne: rne as Record<string, unknown> | null,
+      onboarding: onboarding as unknown as Record<string, unknown>,
+      invoices: invoices as unknown as Record<string, unknown>[],
+      amounts: (filled?.amounts as Record<string, unknown>) ?? null,
+      needs_user_review: filled?.needs_user_review ?? null,
+      confidence: filled?.confidence ?? null,
+      logged_in: loggedIn,
+    }),
+    [agentStep, qIndex, profileDraft, cif, rne, onboarding, invoices, filled, loggedIn],
+  )
+
   useEffect(() => {
     if (!token) {
       setBooting(false)
@@ -228,12 +263,9 @@ export default function App() {
           })
         }
         setEmployees(data.employees || [])
-        if (data.onboarding?.declaration_channel) {
-          setStep(3)
-        } else {
-          setQIndex(0)
-          setStep(1)
-        }
+        // On atterrit toujours sur l'accueil après connexion / inscription.
+        setQIndex(0)
+        setStep(0)
       } catch {
         localStorage.removeItem(TOKEN_KEY)
         setToken(null)
@@ -264,7 +296,7 @@ export default function App() {
       localStorage.setItem(TOKEN_KEY, data.token)
       setToken(data.token)
       setUser(data.user)
-      setStep(1)
+      setStep(0)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erreur connexion')
     } finally {
@@ -533,6 +565,23 @@ export default function App() {
     }
   }
 
+  const onboardingDone = Boolean(onboarding.declaration_channel)
+  const resumeStep = !onboardingDone ? 1 : invoices.length > 0 ? (filled ? 6 : 5) : 3
+  const homeCta = !onboardingDone
+    ? 'Commencer la déclaration'
+    : filled
+      ? 'Voir la déclaration'
+      : invoices.length > 0
+        ? 'Remplir la déclaration'
+        : 'Reprendre le parcours'
+  const homeHint = !onboardingDone
+    ? 'Quelques questions pour personnaliser votre parcours.'
+    : filled
+      ? 'Votre déclaration mensuelle est prête.'
+      : invoices.length > 0
+        ? 'Vos factures sont importées, calculez la déclaration.'
+        : 'Scannez votre carte fiscale et votre extrait RNE.'
+
   const progressIndex =
     step === 1 ? 0 : step === 2 ? 1 : step === 3 ? 2 : step === 4 ? 3 : step === 5 ? 4 : step === 6 ? 5 : -1
 
@@ -553,7 +602,7 @@ export default function App() {
       <div className="shell">
         {/* —— HOME + AUTH —— */}
         {!loggedIn && (
-          <section className="hero home-auth">
+          <section className="hero home-auth" data-spotlight="auth">
             <div className="brand-lockup">
               <img src="/favicon.svg" alt="" className="brand-logo" width={72} height={72} />
               <h1 className="brand">
@@ -635,10 +684,15 @@ export default function App() {
         {loggedIn && (
           <>
             <header className="topbar">
-              <div className="logo-row">
+              <button
+                type="button"
+                className="logo-row logo-btn"
+                onClick={() => setStep(0)}
+                title="Accueil"
+              >
                 <img src="/favicon.svg" alt="" className="logo-mark" width={28} height={28} />
                 <p className="logo-mini">Tasrih</p>
-              </div>
+              </button>
               <div className="progress">
                 {STEPS.map((label, i) => (
                   <i
@@ -648,16 +702,75 @@ export default function App() {
                   />
                 ))}
               </div>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => void logout()}>
-                {user?.email}
-              </button>
+              <div className="topbar-actions">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setStep(0)}
+                >
+                  Accueil
+                </button>
+                <span className="topbar-user" title={user?.email}>
+                  {user?.email}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => void logout()}
+                >
+                  Déconnexion
+                </button>
+              </div>
             </header>
 
             {error && <p className="error">{error}</p>}
 
+            {/* —— 0. ACCUEIL —— */}
+            {step === 0 && (
+              <section className="panel home-panel" data-spotlight="home">
+                <p className="home-hello">
+                  Bonjour{user?.email ? ` ${user.email.split('@')[0]}` : ''} 👋
+                </p>
+                <h2>Votre déclaration mensuelle</h2>
+                <p className="sub">
+                  Bienvenue sur Tasrih. Reprenez votre parcours là où vous l’avez laissé ou
+                  lancez une nouvelle déclaration.
+                </p>
+
+                <div className="home-grid">
+                  <button
+                    type="button"
+                    className="home-card home-card-primary"
+                    onClick={() => setStep(resumeStep)}
+                  >
+                    <span className="home-card-icon" aria-hidden="true">🧾</span>
+                    <strong>{homeCta}</strong>
+                    <span className="home-card-sub">{homeHint}</span>
+                  </button>
+                  <button type="button" className="home-card" onClick={() => setStep(1)}>
+                    <span className="home-card-icon" aria-hidden="true">📝</span>
+                    <strong>Questions</strong>
+                    <span className="home-card-sub">IS, personnel, canal de dépôt</span>
+                  </button>
+                  <button type="button" className="home-card" onClick={() => setStep(3)}>
+                    <span className="home-card-icon" aria-hidden="true">📄</span>
+                    <strong>Scanner mes documents</strong>
+                    <span className="home-card-sub">Carte fiscale · extrait RNE · factures</span>
+                  </button>
+                  {filled && (
+                    <button type="button" className="home-card" onClick={() => setStep(6)}>
+                      <span className="home-card-icon" aria-hidden="true">✅</span>
+                      <strong>Formulaire rempli</strong>
+                      <span className="home-card-sub">Consulter / exporter le PDF officiel</span>
+                    </button>
+                  )}
+                </div>
+              </section>
+            )}
+
             {/* —— 1. QUESTIONS (one screen each) —— */}
             {step === 1 && qIndex === 0 && (
-              <section className="panel question-screen">
+              <section className="panel question-screen" data-spotlight="question">
                 <p className="q-progress">Question 1 / 4</p>
                 <h2>Quel est votre IS de l’année précédente ?</h2>
                 <p className="sub">Indiquez le montant ou la référence de votre impôt sur les sociétés.</p>
@@ -686,7 +799,7 @@ export default function App() {
             )}
 
             {step === 1 && qIndex === 1 && (
-              <section className="panel question-screen">
+              <section className="panel question-screen" data-spotlight="question">
                 <p className="q-progress">Question 2 / 4</p>
                 <h2>Avez-vous du personnel ?</h2>
                 <p className="sub">
@@ -736,7 +849,7 @@ export default function App() {
             )}
 
             {step === 1 && qIndex === 2 && (
-              <section className="panel question-screen">
+              <section className="panel question-screen" data-spotlight="question">
                 <p className="q-progress">Question 3 / 4</p>
                 <h2>Comment déposez-vous vos déclarations ?</h2>
                 <p className="sub">Choisissez votre canal habituel de dépôt.</p>
@@ -777,7 +890,7 @@ export default function App() {
             )}
 
             {step === 1 && qIndex === 3 && (
-              <section className="panel question-screen">
+              <section className="panel question-screen" data-spotlight="question">
                 <p className="q-progress">Question 4 / 4</p>
                 <h2>Un expert comptable gère-t-il votre paie / déclarations ?</h2>
                 <p className="sub">Cela aide à personnaliser les prochaines étapes.</p>
@@ -831,7 +944,7 @@ export default function App() {
 
             {/* —— 2. EMPLOYEES —— */}
             {step === 2 && (
-              <section className="panel">
+              <section className="panel" data-spotlight="employees">
                 <h2>Documents du personnel</h2>
                 <p className="sub">
                   Pour chaque employé, déposez le <strong>contrat de travail</strong> et la{' '}
@@ -911,7 +1024,7 @@ export default function App() {
 
             {/* —— 3. SCAN CIF + RNE —— */}
             {step === 3 && (
-              <section className="panel">
+              <section className="panel" data-spotlight="scan">
                 <h2>Documents fiscaux</h2>
                 <p className="sub">
                   Téléversez la <strong>carte d’identification fiscale</strong> et l’
@@ -1001,7 +1114,7 @@ export default function App() {
 
             {/* —— 4. PROFIL —— */}
             {step === 4 && (
-              <section className="panel">
+              <section className="panel" data-spotlight="profile">
                 <h2>Profil entreprise</h2>
                 <p className="sub">
                   Vérifiez les champs extraits — corrigez notamment la forme juridique si besoin.
@@ -1155,7 +1268,7 @@ export default function App() {
 
             {/* —— 5. FATOORA TEIF XML —— */}
             {step === 5 && (
-              <section className="panel">
+              <section className="panel" data-spotlight="invoices">
                 <h2>Fatoora — factures TEIF</h2>
                 <p className="sub">
                   Importez le fichier <strong>XML TEIF</strong> exporté depuis El Fatoora / TTN.
@@ -1221,7 +1334,7 @@ export default function App() {
 
             {/* —— 6. FORMULAIRE —— */}
             {step === 6 && filled && (
-              <section className="panel">
+              <section className="panel" data-spotlight="form">
                 <h2>Déclaration mensuelle</h2>
                 <p className="sub">
                   {filled.profile.name} · {filled.profile.tax_id}
@@ -1360,6 +1473,13 @@ export default function App() {
           </>
         )}
       </div>
+
+      <AssistantWidget
+        step={agentStep}
+        qIndex={agentStep === 1 ? qIndex : null}
+        context={agentContext}
+        onHighlight={setSpotlight}
+      />
     </div>
   )
 }

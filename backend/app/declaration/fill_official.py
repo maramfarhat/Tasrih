@@ -19,6 +19,7 @@ TEMPLATE = BACKEND / "data" / "templates" / "mensuelle2026.pdf"
 FONT_PATHS = [
     Path(r"C:\Windows\Fonts\arial.ttf"),
     Path(r"C:\Windows\Fonts\tahoma.ttf"),
+    Path("/usr/share/fonts/TTF/DejaVuSans.ttf"),
     Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
 ]
 

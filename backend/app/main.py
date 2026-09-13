@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from app.config import DATA, settings
 from app import db
+from app.agent import router as agent_router
 from app.declaration.extract import extract_cif, extract_rne, extract_invoice_file
 from app.declaration.fatoora import authorize, create_auth_session, is_authorized
 from app.declaration.fill_official import fill_official_pdf
@@ -46,6 +47,8 @@ app = FastAPI(
     description="Scan CIF + RNE + Fatoora → formulaire mensuel officiel rempli",
     version="2.1.0",
 )
+
+app.include_router(agent_router)
 
 app.add_middleware(
     CORSMiddleware,

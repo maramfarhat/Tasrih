@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     groq_model: str = "openai/gpt-oss-120b"
     groq_vision_model: str = "openai/gpt-oss-120b"
 
+    # voix de l'assistant : "edge" (neural, en ligne) ou "piper" (hors ligne)
+    tts_engine: str = "edge"
+    tts_voice: str = "fr-FR-RemyMultilingualNeural"
+    tts_piper_voice: str = "fr_FR-tom-medium"
+
 
 settings = Settings()
 DATA.mkdir(parents=True, exist_ok=True)

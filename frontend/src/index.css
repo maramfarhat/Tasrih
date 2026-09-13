@@ -106,6 +106,101 @@ select {
   gap: 0.55rem;
 }
 
+.logo-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.topbar-user {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+/* —— Accueil (home) —— */
+.home-panel {
+  animation: rise 0.5s ease both;
+}
+
+.home-hello {
+  margin: 0 0 0.35rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--sea);
+}
+
+.home-grid {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 1.25rem;
+}
+
+@media (min-width: 640px) {
+  .home-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.home-card {
+  display: grid;
+  gap: 0.3rem;
+  text-align: left;
+  padding: 1.1rem 1.15rem;
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.home-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(13, 107, 84, 0.45);
+  box-shadow: 0 12px 28px rgba(13, 107, 84, 0.12);
+}
+
+.home-card-primary {
+  background: linear-gradient(135deg, rgba(13, 107, 84, 0.95), rgba(13, 107, 84, 0.78));
+  border-color: transparent;
+  color: #fff;
+}
+
+.home-card-primary .home-card-sub {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.home-card-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.home-card strong {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.home-card-sub {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--ink-soft);
+}
+
 .logo-mark {
   border-radius: 0.35rem;
 }

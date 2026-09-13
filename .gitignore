@@ -6,5 +6,6 @@ backend/data/
 backend/.venv/
 frontend/node_modules/
 frontend/dist/
+frontend/tsconfig.tsbuildinfo
 .DS_Store
 *.log

@@ -11,3 +11,8 @@ Pillow>=10.0.0
 arabic-reshaper>=3.0.0
 python-bidi>=0.4.2
 pytesseract>=0.3.10
+
+# --- Assistant vocal local (optionnel) ---
+piper-tts>=1.8.0
+onnxruntime>=1.20.0
+edge-tts>=7.0.0
