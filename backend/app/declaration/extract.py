@@ -10,7 +10,17 @@ from groq import Groq
 from pypdf import PdfReader
 
 from app.config import settings
-from app.declaration.models import CIFExtract, InvoiceExtract, InvoiceLine, RNEExtract
+from app.declaration.models import (
+    CIFExtract,
+    InvoiceExtract,
+    InvoiceLine,
+    PayslipExtract,
+    RetenueCertificate,
+    RetenueDeclaration,
+    RetenueLine,
+    RetenueOperation,
+    RNEExtract,
+)
 
 CIF_PROMPT = """Tu extrais une CARTE D'IDENTIFICATION FISCALE tunisienne (بطاقة التعريف الجبائي).
 JSON uniquement:
@@ -73,6 +83,23 @@ LEGAL_FORM_LABELS: dict[str, str] = {
 }
 
 
+def _plausible_latin(text: str) -> bool:
+    """Rejette le bruit OCR latin (ex. « lll g ljiog iljagaïg »).
+
+    Un libellé plausible contient au moins deux mots, chacun avec une voyelle et
+    plus d'une lettre distincte. « ASSOCIATION » (mot unique) est traité à part.
+    """
+    words = re.findall(r"[A-Za-zÀ-ÿ]{2,}", text or "")
+    if len(words) < 2:
+        return False
+    vowels = "aeiouyàâäéèêëîïôöûüù"
+    for w in words:
+        low = w.lower()
+        if not any(c in vowels for c in low) or len(set(low)) == 1:
+            return False
+    return True
+
+
 def format_legal_form(code: str | None) -> str | None:
     if not code:
         return None
@@ -115,6 +142,57 @@ def normalize_legal_form(raw: str | None, extra_text: str = "") -> str | None:
     if bare in LEGAL_FORM_LABELS:
         return bare
     return None
+
+def detect_document_type(text: str) -> str:
+    """Détecte le type de document fiscal d'après le texte OCR/IA.
+
+    Retourne "cif", "rne" ou "unknown". Sert à repérer un document
+    téléversé dans la mauvaise zone (ex. extrait RNE dans la zone CIF).
+    """
+    blob = text or ""
+    low = blob.lower()
+    cif = 0
+    rne = 0
+
+    # --- Carte d'identification fiscale ---
+    if re.search(r"carte\s*d['’]?\s*identification\s*fiscale", low):
+        cif += 3
+    if re.search(r"بطاقة\s*التعريف\s*الجب", blob):
+        cif += 3
+    if re.search(r"code\s*t\.?\s*v\.?\s*a\b", low):
+        cif += 2
+    if re.search(r"code\s*cat[ée]gorie", low):
+        cif += 2
+    if re.search(r"établissement\s*secondaire|etab\s*secondaire", low):
+        cif += 1
+    if re.search(r"assujetti", low):
+        cif += 1
+    if re.search(r"dispense\s+de\s+la\s+majoration", low):
+        cif += 1
+    # matricule fiscal : 7 chiffres + /Lettre
+    if re.search(r"\b\d{6,8}\s*/\s*[A-Z]\b", blob):
+        cif += 1
+
+    # --- Extrait RNE ---
+    if re.search(r"registre\s+national\s+des\s+entreprises", low):
+        rne += 3
+    if re.search(r"مضمون\s*من\s*السجل\s*الوطني", blob):
+        rne += 3
+    if re.search(r"السجل\s*التجاري\s*القديم", blob):
+        rne += 2
+    if re.search(r"المعرق\s*الوحيد|رقم\s*التثبت", blob):
+        rne += 2
+    if re.search(r"النظام\s*القانوني|رأس\s*القال", blob):
+        rne += 2
+    if re.search(r"\b\d{7}[A-Z]\b", blob):
+        rne += 1
+
+    if cif > rne and cif >= 2:
+        return "cif"
+    if rne > cif and rne >= 2:
+        return "rne"
+    return "unknown"
+
 
 INVOICE_PROMPT = """Tu extrais une FACTURE ELECTRONIQUE tunisienne (Fatoora / TTN).
 JSON uniquement:
@@ -169,6 +247,26 @@ def _tess_langs() -> str:
         return "eng"
 
 
+def _preprocess_image(path: Path):
+    """Prépare une image pour l'OCR (upscale + niveaux de gris + accentuation).
+
+    Améliore nettement la lecture de l'arabe sur les cartes/reçus scannés.
+    """
+    from PIL import Image, ImageFilter, ImageOps
+
+    img = Image.open(path)
+    try:
+        img = ImageOps.exif_transpose(img)
+    except Exception:
+        pass
+    w, h = img.size
+    scale = max(1, min(4, round(2200 / max(w, h)) if max(w, h) else 1))
+    if scale > 1:
+        img = img.resize((w * scale, h * scale), Image.LANCZOS)
+    gray = ImageOps.autocontrast(img.convert("L"), cutoff=1)
+    return gray.filter(ImageFilter.UnsharpMask(radius=1, percent=120, threshold=2))
+
+
 def _read_image_ocr(path: Path) -> str:
     try:
         from PIL import Image
@@ -178,7 +276,26 @@ def _read_image_ocr(path: Path) -> str:
         if tess.exists():
             pytesseract.pytesseract.tesseract_cmd = str(tess)
         langs = _tess_langs()
-        text = pytesseract.image_to_string(Image.open(path), lang=langs) or ""
+
+        # 1) image brute
+        try:
+            raw = pytesseract.image_to_string(Image.open(path), lang=langs) or ""
+        except Exception:
+            raw = ""
+
+        # 2) image prétraitée (meilleure sur l'arabe)
+        try:
+            pre = pytesseract.image_to_string(_preprocess_image(path), lang=langs) or ""
+        except Exception:
+            pre = ""
+
+        text = pre if len(pre.strip()) >= len(raw.strip()) else raw
+
+        # Fusion : le prétraitement lit mieux l'arabe, l'image brute garde certains
+        # libellés latins. On donne les deux à l'IA / aux parseurs.
+        if raw.strip() and pre.strip() and raw.strip() != pre.strip():
+            text = f"{raw}\n{pre}"
+
         if len(text.strip()) < 30 and langs != "eng":
             text = pytesseract.image_to_string(Image.open(path), lang="eng") or text
         return text
@@ -345,9 +462,42 @@ def _heuristic_cif(text: str) -> dict:
 
     if re.search(r"(?i)ASSOCIATION", text) and not data.get("main_activity"):
         data["main_activity"] = "ASSOCIATION"
-    act = re.search(r"(?i)Activit[eé]\s*Principale\s*[:\.]?\s*([A-Za-z][^\n]{2,40})", text)
-    if act:
-        data["main_activity"] = act.group(1).strip()
+    # Activité en latin : acceptée seulement si plausible (évite le bruit OCR).
+    act = re.search(r"(?i)Activit[eé]\s*Principale\s*[:\.]?\s*([A-Za-z][^\n]{2,50})", text)
+    if act and _plausible_latin(act.group(1)):
+        data["main_activity"] = act.group(1).strip(" .:-،")
+    # Activité en arabe avec libellé explicite.
+    act_ar = re.search(r"النشاط\s*الرئيسي\s*[:=\-–]?\s*([^\n]{3,90})", text)
+    if act_ar:
+        val = re.sub(r"[»«\.\-\s]+$", "", act_ar.group(1)).strip(" .:،")
+        val = re.sub(r"\s{2,}", " ", val)
+        if val and len([c for c in val if c.isalpha()]) >= 4:
+            data["main_activity"] = val
+    # Carte bilingue : le libellé « Activité Principale » peut être à droite de la
+    # valeur arabe (OCR RTL). On récupère le segment arabe présent sur la même ligne.
+    if not data.get("main_activity"):
+        candidates: list[str] = []
+        for line in text.splitlines():
+            if re.search(r"Activit[ée]\s*Principale", line, re.I):
+                for run in re.findall(
+                    r"[\u0600-\u06FF][\u0600-\u06FF\s،,؛;.\-]{3,}", line
+                ):
+                    cand = run.strip(" .،,؛-").replace("ء", "")
+                    # retirer les mots du libellé qui se mêlent à la valeur (OCR RTL)
+                    cand = re.sub(
+                        r"(التشاط|النشاط|الرئيسي|الرئيسية|الرئيس|الرئي|الثانوي)",
+                        " ",
+                        cand,
+                    )
+                    cand = re.sub(r"\s{2,}", " ", cand).strip(" .،,؛:-")
+                    letters = [c for c in cand if c.isalpha()]
+                    # le vrai libellé ne contient pas le mot « رئيسي » (label arabe)
+                    if len(letters) >= 4 and "رئيسي" not in cand:
+                        candidates.append(cand)
+        if candidates:
+            data["main_activity"] = max(
+                candidates, key=lambda s: len([c for c in s if c.isalpha()])
+            )
 
     start = re.search(
         r"(?i)(?:Acompt|Acompter|au\.?)\s*[:\.]?\s*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})",
@@ -691,6 +841,382 @@ def extract_invoice_with_ai(path: Path) -> InvoiceExtract:
     )
 
 
+PAYSLIP_PROMPT = """Tu extrais une FICHE DE PAIE tunisienne (bulletin de salaire, بطاقة خلاص الأجر).
+JSON uniquement:
+{
+  "employee_name": string|null,
+  "period": string|null,
+  "salaire_brut": number|null,
+  "cotisations": number|null,
+  "salaire_net": number|null,
+  "confidence": number,
+  "warnings": string[]
+}
+Le champ salaire_brut est la masse salariale brute (salaire de base + primes + indemnités,
+avant cotisations). N'invente rien. Texte/image:
+"""
+
+
+def _parse_tn_number(num: str) -> float:
+    s = str(num or "").strip().replace(" ", "").replace("\u00a0", "")
+    if not s:
+        return 0.0
+    if re.search(r",\d{3}$", s) and s.count(",") == 1:
+        s = s.replace(",", ".")
+    elif "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif s.count(",") == 1 and len(s.split(",")[1]) <= 3:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def _heuristic_payslip(text: str) -> dict:
+    """Lecture simple d'une fiche de paie (FR/AR) sans IA."""
+    data: dict = {}
+    if not text:
+        return data
+
+    def grab(patterns: list[str]) -> float | None:
+        for pat in patterns:
+            m = re.search(pat, text, re.I)
+            if m:
+                val = _parse_tn_number(m.group(1))
+                if val:
+                    return val
+        return None
+
+    brut = grab(
+        [
+            r"salaire\s*brut\s*[:\\.]?\s*([\d\s]+[.,]\d{3})",
+            r"brut\s*(?:fiscal|mensuel)?\s*[:\\.]?\s*([\d\s]+[.,]\d{3})",
+            r"الأجر\s*الخام\s*[:\\.]?\s*([\d\s]+[.,]\d{3})",
+            r"الاجر\s*الخام\s*[:\\.]?\s*([\d\s]+[.,]\d{3})",
+        ]
+    )
+    net = grab(
+        [
+            r"net\s*(?:à\s*)?payer\s*[:\\.]?\s*([\d\s]+[.,]\d{3})",
+            r"salaire\s*net\s*[:\\.]?\s*([\d\s]+[.,]\d{3})",
+            r"الأجر\s*الصافي\s*[:\\.]?\s*([\d\s]+[.,]\d{3})",
+        ]
+    )
+    cot = grab(
+        [
+            r"(?:cotisations?|cnss|social)\s*[:\\.]?\s*([\d\s]+[.,]\d{3})",
+            r"الاقتطاعات\s*[:\\.]?\s*([\d\s]+[.,]\d{3})",
+        ]
+    )
+    name = re.search(
+        r"(?im)^\s*(?:nom|employ[ée]|salari[ée])\s*[:\\.]?\s*(.{2,60})$", text
+    )
+    if brut:
+        data["salaire_brut"] = brut
+    if net:
+        data["salaire_net"] = net
+    if cot:
+        data["cotisations"] = cot
+    if name:
+        data["employee_name"] = name.group(1).strip()
+    if brut:
+        data["confidence"] = 0.7
+        data["warnings"] = ["Masse salariale brute lue par parseur OCR"]
+    return data
+
+
+def extract_payslip(path: Path, use_ai: bool = True) -> PayslipExtract:
+    """Extrait la masse salariale brute d'une fiche de paie (IA + heuristique).
+
+    L'heuristique tourne d'abord ; l'IA n'est sollicitée que si elle échoue.
+    """
+    text = extract_text_from_file(path)
+    heur = _heuristic_payslip(text)
+    data: dict = {}
+    warnings: list[str] = []
+    if use_ai and not heur.get("salaire_brut"):
+        try:
+            data, _preview, ai_warnings = _ai_extract(PAYSLIP_PROMPT, path)
+            warnings.extend(ai_warnings or [])
+        except Exception:
+            data = {}
+    merged = _merge(heur, data)
+    for key in ("salaire_brut", "cotisations", "salaire_net", "employee_name", "period"):
+        if heur.get(key) is not None:
+            merged[key] = heur[key]
+    conf = float(merged.get("confidence") or (0.7 if merged.get("salaire_brut") else 0.15))
+    return PayslipExtract(
+        filename=path.name,
+        employee_name=merged.get("employee_name"),
+        period=merged.get("period"),
+        salaire_brut=merged.get("salaire_brut"),
+        cotisations=merged.get("cotisations"),
+        salaire_net=merged.get("salaire_net"),
+        confidence=conf,
+        warnings=list(merged.get("warnings") or []) + warnings,
+    )
+
+
+def _tej_local(tag: str) -> str:
+    return tag.split("}")[-1] if "}" in tag else tag
+
+
+def _tej_norm(tag: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", _tej_local(tag).lower())
+
+
+def _tej_leaf_values(node) -> dict[str, str]:
+    """Aplatit un noeud XML en {nom_local_normalisé: texte} (feuilles uniquement)."""
+    out: dict[str, str] = {}
+    for el in node.iter():
+        children = list(el)
+        txt = (el.text or "").strip()
+        if not children and txt:
+            out.setdefault(_tej_norm(el.tag), txt)
+        # attributs (certains XML TEJ stockent les montants en attribut)
+        for key, val in (el.attrib or {}).items():
+            if str(val).strip():
+                out.setdefault(_tej_norm(key), str(val).strip())
+    return out
+
+
+def _tej_pick(values: dict[str, str], patterns: tuple[str, ...]) -> str | None:
+    for name, val in values.items():
+        if any(p in name for p in patterns):
+            return val
+    return None
+
+
+def _tej_amount(values: dict[str, str], patterns: tuple[str, ...]) -> float | None:
+    raw = _tej_pick(values, patterns)
+    if raw is None:
+        return None
+    val = _parse_tn_number(raw)
+    return val if val else None
+
+
+def _xml_local(tag: str) -> str:
+    return tag.split("}")[-1] if "}" in tag else tag
+
+
+def _xml_child(node, name: str):
+    if node is None:
+        return None
+    for el in list(node):
+        if _xml_local(el.tag) == name:
+            return el
+    return None
+
+
+def _xml_text(node, *names: str) -> str | None:
+    for name in names:
+        el = _xml_child(node, name)
+        if el is not None and (el.text or "").strip():
+            return (el.text or "").strip()
+    return None
+
+
+def _xml_num(raw: str | None) -> float:
+    if raw is None:
+        return 0.0
+    try:
+        return float(str(raw).replace(",", ".").replace(" ", ""))
+    except ValueError:
+        return 0.0
+
+
+def extract_retenue_declaration(path: Path) -> RetenueDeclaration:
+    """Parse un fichier TEJ « DeclarationsRS » (déclaration de retenue à la source).
+
+    Schéma : Declarant / ReferenceDeclaration / AjouterCertificats[Certificat…].
+    Chaque certificat contient un bénéficiaire, une liste d'opérations et un total.
+    """
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(path).getroot()
+    decl = RetenueDeclaration(filename=path.name)
+
+    declarant = _xml_child(root, "Declarant")
+    decl.declarant_id = _xml_text(declarant, "Identifiant")
+    decl.declarant_category = _xml_text(declarant, "CategorieContribuable")
+
+    ref = _xml_child(root, "ReferenceDeclaration")
+    decl.acte_depot = _xml_text(ref, "ActeDepot")
+    year = _xml_text(ref, "AnneeDepot")
+    month = _xml_text(ref, "MoisDepot")
+    decl.year = int(year) if year and year.isdigit() else None
+    decl.month = int(month) if month and month.isdigit() else None
+
+    certs_parent = _xml_child(root, "AjouterCertificats") or root
+    cert_els = [c for c in list(certs_parent) if _xml_local(c.tag) == "Certificat"]
+    for cert_el in cert_els:
+        cert = RetenueCertificate()
+        beneficiary = _xml_child(cert_el, "Beneficiaire")
+        if beneficiary is not None:
+            cert.beneficiary_name = _xml_text(beneficiary, "NometprenonOuRaisonsociale")
+            cert.beneficiary_address = _xml_text(beneficiary, "Adresse")
+            cert.beneficiary_activity = _xml_text(beneficiary, "Activite")
+            resident = _xml_text(beneficiary, "Resident")
+            cert.resident = resident in (None, "1", "true", "True")
+            idtax = _xml_child(beneficiary, "IdTaxpayer")
+            if idtax is not None:
+                holder = (
+                    _xml_child(idtax, "MatriculeFiscal")
+                    or _xml_child(idtax, "CIN")
+                    or idtax
+                )
+                cert.beneficiary_id = _xml_text(holder, "Identifiant")
+                cert.beneficiary_id_type = _xml_text(holder, "TypeIdentifiant")
+                cert.beneficiary_category = _xml_text(holder, "CategorieContribuable")
+
+        cert.date_paiement = _xml_text(cert_el, "DatePayement")
+        cert.reference = _xml_text(cert_el, "Ref_certif_chez_declarant")
+
+        ops_parent = _xml_child(cert_el, "ListeOperations")
+        if ops_parent is not None:
+            for op_el in [o for o in list(ops_parent) if _xml_local(o.tag) == "Operation"]:
+                op = RetenueOperation(
+                    id_type_operation=op_el.attrib.get("IdTypeOperation"),
+                    annee_facturation=_xml_text(op_el, "AnneeFacturation"),
+                    montant_ht=_xml_num(_xml_text(op_el, "MontantHT")),
+                    taux_rs=_xml_num(_xml_text(op_el, "TauxRS")) or None,
+                    taux_tva=_xml_num(_xml_text(op_el, "TauxTVA")) or None,
+                    montant_tva=_xml_num(_xml_text(op_el, "MontantTVA")),
+                    montant_ttc=_xml_num(_xml_text(op_el, "MontantTTC")),
+                    montant_rs=_xml_num(_xml_text(op_el, "MontantRS")),
+                    montant_net_servi=_xml_num(_xml_text(op_el, "MontantNetServi")),
+                )
+                op.nature = op.id_type_operation
+                cert.operations.append(op)
+
+        totals = _xml_child(cert_el, "TotalPayement")
+        if totals is not None:
+            cert.total_ht = _xml_num(_xml_text(totals, "TotalMontantHT"))
+            cert.total_tva = _xml_num(_xml_text(totals, "TotalMontantTVA"))
+            cert.total_ttc = _xml_num(_xml_text(totals, "TotalMontantTTC"))
+            cert.total_rs = _xml_num(_xml_text(totals, "TotalMontantRS"))
+            cert.total_net_servi = _xml_num(_xml_text(totals, "TotalMontantNetServi"))
+        else:
+            cert.total_ht = round(sum(o.montant_ht for o in cert.operations), 3)
+            cert.total_tva = round(sum(o.montant_tva for o in cert.operations), 3)
+            cert.total_ttc = round(sum(o.montant_ttc for o in cert.operations), 3)
+            cert.total_rs = round(sum(o.montant_rs for o in cert.operations), 3)
+            cert.total_net_servi = round(
+                sum(o.montant_net_servi for o in cert.operations), 3
+            )
+        decl.certificates.append(cert)
+
+    decl.total_ht = round(sum(c.total_ht for c in decl.certificates), 3)
+    decl.total_tva = round(sum(c.total_tva for c in decl.certificates), 3)
+    decl.total_ttc = round(sum(c.total_ttc for c in decl.certificates), 3)
+    decl.total_rs = round(sum(c.total_rs for c in decl.certificates), 3)
+    decl.total_net_servi = round(sum(c.total_net_servi for c in decl.certificates), 3)
+    return decl
+
+
+def retenue_declaration_to_lines(decl: RetenueDeclaration) -> list[RetenueLine]:
+    """Aplatit une déclaration RS en lignes de retenue (référentiel du pipeline)."""
+    lines: list[RetenueLine] = []
+    for cert in decl.certificates:
+        ops = cert.operations or [RetenueOperation()]
+        for op in ops:
+            lines.append(
+                RetenueLine(
+                    certificate_number=cert.reference,
+                    beneficiary=cert.beneficiary_name,
+                    beneficiary_tax_id=cert.beneficiary_id,
+                    nature=op.nature,
+                    base=round(op.montant_ht, 3),
+                    rate=op.taux_rs,
+                    amount=round(op.montant_rs, 3),
+                    source="tej_xml",
+                    confidence=0.95,
+                    warnings=["Certificat de retenue TEJ importé"],
+                )
+            )
+    return lines
+
+
+def extract_retenue_tej_xml(path: Path) -> list[RetenueLine]:
+    """Parse un ou plusieurs certificats de retenue à la source TEJ (XML).
+
+    Le schéma TEJ n'est pas figé : on identifie les noeuds « certificat » contenant
+    assiette/taux/montant, puis on lit les champs par correspondance de nom.
+    """
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(path).getroot()
+
+    # Schéma officiel « DeclarationsRS » (déclaration de retenue à la source).
+    if _xml_local(root.tag) == "DeclarationsRS":
+        lines = retenue_declaration_to_lines(extract_retenue_declaration(path))
+        if lines:
+            return lines
+
+    def looks_like_cert(node) -> bool:
+        vals = _tej_leaf_values(node)
+        has_amount = any(
+            p in n for n in vals for p in ("montant", "amount", "retenue", "impot", "taxe")
+        )
+        has_base = any(p in n for n in vals for p in ("base", "assiette", "imposable"))
+        has_rate = any(p in n for n in vals for p in ("taux", "rate", "pourcentage"))
+        # Un certificat réel porte à la fois un montant et une assiette (ou un taux),
+        # ou au minimum une assiette et un taux ; cela évite de confondre une simple
+        # balise <Base> ou <MontantRetenue> avec un certificat.
+        return (has_amount and (has_base or has_rate)) or (has_base and has_rate)
+
+    candidates = [el for el in root.iter() if looks_like_cert(el)]
+    # Garder les noeuds racines minimaux (sans enfant candidat).
+    certs = []
+    for el in candidates:
+        if not any(looks_like_cert(child) for child in list(el)):
+            certs.append(el)
+    if not certs:
+        certs = [root]
+
+    lines: list[RetenueLine] = []
+    for cert in certs:
+        vals = _tej_leaf_values(cert)
+        base = _tej_amount(vals, ("base", "assiette", "imposable")) or 0.0
+        amount = _tej_amount(
+            vals, ("montantretenue", "montantimpot", "montant", "retenue", "impot", "taxe")
+        )
+        rate = _tej_amount(vals, ("taux", "rate", "pourcentage"))
+        if not amount and base and rate:
+            factor = rate / 100.0 if rate >= 1 else rate
+            amount = base * factor
+        if not base and not amount:
+            continue
+        lines.append(
+            RetenueLine(
+                certificate_number=_tej_pick(
+                    vals, ("numero", "numcertificat", "reference", "identifiant")
+                ),
+                beneficiary=_tej_pick(vals, ("beneficiaire", "raisonsociale", "nom", "designation")),
+                beneficiary_tax_id=_tej_pick(vals, ("matriculefiscal", "identifiantfiscal", "nif", "cin")),
+                nature=_tej_pick(vals, ("nature", "objet", "type")),
+                base=round(base, 3),
+                rate=rate,
+                amount=round(amount or 0.0, 3),
+                source="tej_xml",
+                confidence=0.9 if amount else 0.5,
+                warnings=["Certificat de retenue TEJ importé"] if amount else [
+                    "Montant de retenue introuvable — à vérifier"
+                ],
+            )
+        )
+    if not lines:
+        lines.append(
+            RetenueLine(
+                source="tej_xml",
+                confidence=0.2,
+                warnings=[f"Aucun montant de retenue reconnu dans {path.name}"],
+            )
+        )
+    return lines
+
+
 def _heuristic_invoice(text: str) -> dict:
     """Parse montants typiques facture TN (10 000,000 / 1 900,000 / 1,000)."""
     data: dict = {}
@@ -698,18 +1224,7 @@ def _heuristic_invoice(text: str) -> dict:
         return data
 
     def parse_tn(num: str) -> float:
-        s = num.strip().replace(" ", "")
-        # 10000,000 or 10.000,000 or 11900.000
-        if re.search(r",\d{3}$", s) and s.count(",") == 1:
-            s = s.replace(",", ".")
-        elif "," in s and "." in s:
-            s = s.replace(".", "").replace(",", ".")
-        elif s.count(",") == 1 and len(s.split(",")[1]) <= 3:
-            s = s.replace(",", ".")
-        try:
-            return float(s)
-        except ValueError:
-            return 0.0
+        return _parse_tn_number(num)
 
     inv_no = re.search(r"(?i)FACTURE\s*N[°º]?\s*([A-Z0-9\-]+)", text)
     if inv_no:

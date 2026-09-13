@@ -1,0 +1,1075 @@
+WORKFLOW GLOBAL — AUTOMATISATION DES DECLARATIONS FISCALES & SOCIALES
+Version de travail — Parcours utilisateur et logique système
+
+OBJECTIF
+-------
+Créer une seule boucle mensuelle à partir d'une configuration initiale de
+l'entreprise. Les données sont saisies une fois, réutilisées automatiquement,
+validées par l'utilisateur avant génération de la déclaration, puis conservées
+en base pour les périodes suivantes.
+
+PRINCIPE GENERAL
+----------------
+ONBOARDING (une seule fois)
+        ↓
+Configuration entreprise + salariés + paramètres fiscaux
+        ↓
+Chaque mois :
+RAS SALAIRES → RAS PRESTATIONS → TVA → TAP/TFP/FOPROLOS
+        ↓
+Contrôles et validation des modules
+        ↓
+Assemblage de la déclaration mensuelle
+        ↓
+PDF pré-rempli → téléchargement / dépôt e-DGII
+        ↓
+Fin de trimestre : déclaration CNSS automatique
+        ↓
+Les données restent en base pour le mois suivant
+
+
+======================================================================
+ÉTAPE 0 — ONBOARDING ENTREPRISE (UNE SEULE FOIS)
+======================================================================
+
+Déclencheur
+-----------
+Création du compte / première configuration de l'entreprise.
+
+ACTION UTILISATEUR
+------------------
+1. Scanne deux documents :
+   - Carte d'identification fiscale (CIF)
+   - Extrait RNE
+
+2. Complète ou confirme les informations qui ne peuvent pas être
+   récupérées automatiquement.
+
+DONNÉES EXTRAITES PAR OCR
+-------------------------
+À partir des documents :
+- Raison sociale
+- Matricule fiscal
+- Code TVA
+- Forme juridique
+- Adresse
+- Code activité
+
+CHAMPS À COMPLÉTER / CONFIRMER
+------------------------------
+- IS de l'année précédente
+- Taux TAP
+  Valeur proposée par défaut : 0,5 %
+  → L'utilisateur doit confirmer ou corriger.
+- Liste des salariés :
+  - Nom et prénom
+  - Matricule CNSS
+  - Salaire brut de référence
+
+LOGIQUE SYSTÈME
+---------------
+1. Vérifier que les données obligatoires sont présentes.
+2. Contrôler la cohérence élémentaire des informations.
+3. Créer la fiche entreprise dans la base de données.
+4. Enregistrer les salariés et leurs paramètres.
+5. Enregistrer les paramètres fiscaux applicables.
+6. Générer automatiquement le calendrier des 12 prochains mois
+   d'échéances.
+7. Créer le premier cycle mensuel disponible.
+
+DONNÉES CONSERVÉES EN BASE
+--------------------------
+ENTREPRISE
+- ID entreprise
+- Raison sociale
+- Matricule fiscal
+- Code TVA
+- Forme juridique
+- Adresse
+- Code activité
+- IS année précédente
+- Taux TAP
+
+SALARIÉS
+- ID salarié
+- Nom
+- Matricule CNSS
+- Salaire brut de référence
+- ID entreprise
+
+CALENDRIER
+- Échéance
+- Type de déclaration
+- Période concernée
+- Statut
+- Rappel / notification
+
+STATUT
+------
+ONBOARDING → CONFIGURÉ
+
+Une fois cette étape terminée, l'utilisateur ne doit pas avoir à
+ressaisir les informations permanentes à chaque déclaration.
+
+
+======================================================================
+ÉTAPE 1 — RAS SALAIRES (CHAQUE MOIS)
+======================================================================
+
+OBJECTIF
+--------
+Récupérer les montants liés aux salaires du mois écoulé.
+
+DÉCLENCHEUR
+-----------
+Début du nouveau cycle mensuel / échéance de déclaration.
+
+ACTION UTILISATEUR
+------------------
+Scanne l'état de paie du mois.
+
+DOCUMENT ENTRANT
+----------------
+- État de paie mensuel
+
+OCR / EXTRACTION
+----------------
+Le système extrait :
+- Total brut
+- Total IRPP
+- Total CSS
+
+EXEMPLE D'AFFICHAGE
+-------------------
+Brut : 4 700 000
+IRPP : 365 000
+CSS : 23 500
+
+VALIDATION UTILISATEUR
+----------------------
+L'utilisateur peut :
+- Confirmer les montants
+OU
+- Corriger manuellement les montants
+
+LOGIQUE SYSTÈME
+---------------
+1. Associer les montants à l'entreprise.
+2. Associer les montants à la période mensuelle.
+3. Enregistrer les trois montants.
+4. Conserver le document source / la trace d'extraction si disponible.
+5. Marquer le module comme VALIDÉ après confirmation.
+
+DONNÉES STOCKÉES
+----------------
+- Période
+- Total brut
+- Total IRPP
+- Total CSS
+- Source du document
+- Date de validation
+- Statut du module
+
+SORTIE
+------
+Aucun document généré à ce stade.
+Les trois montants sont disponibles en base pour les étapes suivantes.
+
+STATUT
+------
+EN ATTENTE → OCR → À CONFIRMER → VALIDÉ
+
+
+======================================================================
+ÉTAPE 2 — RAS PRESTATIONS (CHAQUE MOIS)
+======================================================================
+
+OBJECTIF
+--------
+Identifier les opérations soumises à retenue à la source et calculer
+la RAS correspondante.
+
+ACTION UTILISATEUR
+------------------
+Scanne N documents correspondant aux factures / pièces des
+prestataires PAYÉS pendant le mois.
+
+DOCUMENTS POSSIBLES
+-------------------
+- Honoraires comptable
+- Honoraires avocat
+- Quittances de loyer
+- Factures de services
+- Factures d'achat auprès d'un commerçant forfaitaire
+- Autres pièces pertinentes soumises à RAS
+
+OCR / EXTRACTION PAR DOCUMENT
+-----------------------------
+Pour chaque facture, extraire :
+- Nom du prestataire
+- Matricule fiscal
+- Montant HT
+- Type / nature de l'opération
+- Date du document
+- Référence du document, si disponible
+
+CLASSIFICATION
+--------------
+Le système détermine le taux selon la nature de l'opération.
+
+RÈGLES DE TAUX CONFIGURÉES
+---------------------------
+- Honoraires / services : 5 %
+- Loyers : 10 %
+- Achat forfaitaire : 1 % (précompte)
+- Non-résident : 15 %
+
+IMPORTANT
+---------
+Les taux doivent être paramétrables dans le moteur fiscal afin de
+pouvoir être mis à jour lorsque la réglementation change.
+L'application ne doit pas considérer les taux comme définitivement
+figés dans le code.
+
+CALCUL
+------
+Pour chaque opération :
+
+RAS = Montant HT × Taux applicable
+
+EXEMPLE
+--------
+Cabinet EL AMINE
+Montant HT : 1 000 000
+Taux : 5 %
+RAS : 50 000
+
+Bailleur
+Montant HT : 2 000 000
+Taux : 10 %
+RAS : 200 000
+
+TABLEAU DE VALIDATION
+---------------------
+Le système affiche au minimum :
+- Prestataire
+- Matricule fiscal
+- Nature
+- Montant HT
+- Taux
+- Montant RAS
+
+L'utilisateur :
+- confirme le tableau
+OU
+- corrige les données nécessaires.
+
+APRÈS VALIDATION
+----------------
+1. Stocker chaque opération en base.
+2. Regrouper les montants de RAS par taux.
+3. Conserver la relation entre la RAS et le prestataire.
+4. Générer une attestation de retenue à la source pour chaque
+   prestataire concerné.
+5. Rendre les attestations disponibles en PDF.
+
+SORTIE
+------
+- Données RAS enregistrées en base
+- Attestations de retenue à la source en PDF
+
+STATUT
+------
+EN ATTENTE → OCR → CLASSIFICATION → À CONFIRMER → VALIDÉ
+
+
+======================================================================
+ÉTAPE 3 — TVA (CHAQUE MOIS)
+======================================================================
+
+OBJECTIF
+--------
+Calculer la TVA collectée, la TVA déductible et la TVA nette à payer
+ou le nouveau crédit de TVA.
+
+ACTION UTILISATEUR
+------------------
+Scanne deux lots de documents :
+
+LOT A — VENTES
+- Toutes les factures de vente du mois.
+
+LOT B — ACHATS
+- Toutes les factures d'achat du mois.
+
+OCR / EXTRACTION
+----------------
+Pour chaque facture :
+- Montant HT
+- Taux TVA
+- Nature de l'opération
+- Date
+- Référence
+- Identification du client / fournisseur si disponible
+
+TVA COLLECTÉE
+-------------
+Calculer la TVA collectée sur les ventes.
+
+Ventilation :
+- 19 %
+- 13 %
+- 7 %
+
+TVA COLLECTÉE = somme des TVA sur les ventes
+
+TVA DÉDUCTIBLE
+--------------
+Calculer la TVA déductible sur les achats éligibles.
+
+Ventilation possible :
+- Biens
+- Services
+
+TVA DÉDUCTIBLE = somme de la TVA déductible sur les achats
+
+CRÉDIT DE TVA ANTÉRIEUR
+-----------------------
+Le système récupère automatiquement le crédit de TVA du mois
+précédent depuis la base de données.
+
+CALCUL
+------
+TVA nette avant crédit =
+    TVA collectée − TVA déductible
+
+TVA nette après crédit =
+    TVA collectée − TVA déductible + crédit de TVA du mois précédent
+
+Si le résultat est supérieur à 0 :
+    TVA due = résultat
+
+Si le résultat est inférieur à 0 :
+    TVA due = 0
+    Nouveau crédit de TVA = valeur absolue du résultat
+
+EXEMPLE
+-------
+CA 19 % : 100 000
+CA 13 % : 20 000
+TVA collectée : 21 600
+TVA déductible : 13 300
+TVA due : 8 300
+
+VALIDATION
+----------
+L'utilisateur consulte un récapitulatif :
+- Chiffre d'affaires HT par taux
+- TVA collectée
+- TVA déductible
+- Crédit antérieur
+- TVA nette
+- TVA due / nouveau crédit
+
+L'utilisateur confirme ou corrige les données.
+
+APRÈS VALIDATION
+----------------
+1. Enregistrer les données de ventes.
+2. Enregistrer les données d'achats.
+3. Enregistrer la TVA collectée.
+4. Enregistrer la TVA déductible.
+5. Enregistrer la TVA due ou le nouveau crédit.
+6. Conserver le crédit pour le mois suivant si nécessaire.
+
+SORTIE
+------
+Aucun document intermédiaire obligatoire.
+Les montants validés sont stockés en base.
+
+STATUT
+------
+EN ATTENTE → OCR → CALCUL → À CONFIRMER → VALIDÉ
+
+
+======================================================================
+ÉTAPE 4 — TAP / TFP / FOPROLOS (AUTOMATIQUE)
+======================================================================
+
+OBJECTIF
+--------
+Calculer automatiquement les taxes et contributions dépendant des
+données déjà validées.
+
+ACTION UTILISATEUR
+------------------
+Aucune action.
+Aucun scan.
+
+PRÉREQUIS
+---------
+Étape 1 VALIDÉE
+Étape 3 VALIDÉE
+
+CALCUL TAP
+----------
+TAP = CA total du mois × taux TAP configuré
+
+Le taux TAP provient de la configuration entreprise et doit rester
+modifiable / paramétrable.
+
+CALCUL TFP
+----------
+TFP = Total brut des salaires × 1 %
+
+CALCUL FOPROLOS
+---------------
+FOPROLOS = Total brut des salaires × 1 %
+
+SOURCE DES DONNÉES
+------------------
+CA total → Étape 3
+Total brut salaires → Étape 1
+Taux TAP → Configuration entreprise
+
+CONTRÔLES
+---------
+Le système doit vérifier :
+- Que les étapes 1 et 3 sont validées.
+- Que le CA est disponible.
+- Que le total brut est disponible.
+- Que le taux TAP est configuré et confirmé.
+
+SORTIE
+------
+Trois montants calculés :
+- TAP
+- TFP
+- FOPROLOS
+
+Aucune validation utilisateur supplémentaire n'est requise dans
+le workflow prévu.
+
+STATUT
+------
+AUTOMATIQUE → CALCULÉ
+
+
+======================================================================
+ÉTAPE 5 — DÉCLARATION MENSUELLE FINALE
+======================================================================
+
+OBJECTIF
+--------
+Assembler automatiquement toutes les données validées dans la
+structure de la déclaration mensuelle officielle.
+
+DÉCLENCHEUR
+-----------
+Les modules suivants doivent être VALIDÉS / CALCULÉS :
+- Module 1 : RAS salaires
+- Module 2 : RAS prestations
+- Module 3 : TVA
+- Module 4 : TAP / TFP / FOPROLOS
+
+CONTRÔLE DE COMPLÉTUDE
+----------------------
+Avant génération, le système vérifie :
+- Toutes les données obligatoires sont présentes.
+- Tous les modules requis sont validés.
+- Aucun calcul obligatoire n'est en erreur.
+- La période déclarée est correcte.
+- Les montants sont cohérents.
+
+ASSEMBLAGE DU FORMULAIRE
+------------------------
+Le système remplit la structure du formulaire MENSUELLE officiel.
+
+RUBRIQUES
+---------
+RUBRIQUE RAS
+    ← Étape 1 : RAS liées aux salaires
+    ← Étape 2 : RAS liées aux prestations
+
+RUBRIQUE TVA
+    ← Étape 3 : TVA collectée / déductible / due ou crédit
+
+RUBRIQUE TFP / FOPROLOS / TAP
+    ← Étape 4 : montants calculés automatiquement
+
+TOTAL GÉNÉRAL
+-------------
+Le système additionne les montants à payer selon la structure
+du formulaire officiel.
+
+EXEMPLE D'AFFICHAGE
+-------------------
+Total à payer : 9 682,500 DT
+Échéance : avant le 28
+
+ÉCRAN FINAL
+-----------
+Afficher un récapitulatif clair :
+- Période
+- RAS salaires
+- RAS prestations
+- TVA
+- TAP
+- TFP
+- FOPROLOS
+- Total général
+- Date limite
+- Statut
+
+ACTION UTILISATEUR
+------------------
+Aucune saisie supplémentaire obligatoire.
+
+L'utilisateur peut :
+- Télécharger le PDF pré-rempli
+- Vérifier le document
+- Déposer la déclaration via e-DGII
+
+SORTIE
+------
+- PDF de déclaration mensuelle pré-rempli
+- Historique de la déclaration
+- Statut de dépôt / téléchargement si suivi prévu
+
+STATUT
+------
+EN ATTENTE → PRÊT À GÉNÉRER → GÉNÉRÉ → TÉLÉCHARGÉ / DÉPOSÉ → TERMINÉ
+
+
+======================================================================
+ÉTAPE 6 — CNSS TRIMESTRIELLE
+======================================================================
+
+OBJECTIF
+--------
+Produire automatiquement la déclaration CNSS à partir des états
+de paie mensuels déjà enregistrés.
+
+DÉCLENCHEUR
+-----------
+Fin de trimestre.
+
+Périodes concernées :
+- Janvier → déclaration du trimestre
+- Avril → déclaration du trimestre
+- Juillet → déclaration du trimestre
+- Octobre → déclaration du trimestre
+
+Le calendrier et les échéances exactes doivent être paramétrables
+selon les règles en vigueur.
+
+ACTION UTILISATEUR
+------------------
+Aucune saisie supplémentaire si les trois états de paie mensuels
+sont déjà validés.
+
+NOTIFICATION
+------------
+Le système informe l'utilisateur :
+"Votre déclaration CNSS trimestrielle est prête."
+
+DONNÉES SOURCES
+---------------
+Les données proviennent des trois étapes 1 correspondant aux trois
+mois du trimestre.
+
+CONSTRUCTION DE LA GRILLE
+-------------------------
+Pour chaque salarié :
+- Nom
+- Matricule CNSS
+- Salaire mois 1
+- Salaire mois 2
+- Salaire mois 3
+- Total trimestre
+
+CALCUL
+------
+Pour chaque période :
+Cotisations CNSS = Base soumise × taux CNSS en vigueur
+
+Le taux doit être paramétrable et versionné afin de tenir compte
+des changements réglementaires.
+
+CONTRÔLES
+---------
+Avant génération :
+- Les trois états de paie doivent être disponibles.
+- Les salariés doivent être identifiables.
+- Les matricules CNSS doivent être présents.
+- Les bases de calcul doivent être cohérentes.
+- Le taux applicable doit être celui en vigueur pour la période.
+
+GÉNÉRATION
+-----------
+Le système :
+1. Construit automatiquement la déclaration.
+2. Calcule les cotisations.
+3. Génère le PDF de déclaration CNSS.
+4. Affiche un rappel d'échéance.
+
+EXEMPLE DE RAPPEL
+-----------------
+"Dépôt de la déclaration CNSS : avant le 15."
+
+SORTIE
+------
+- Grille CNSS
+- Montants de cotisations
+- PDF de déclaration CNSS
+- Notification / rappel
+
+STATUT
+------
+EN ATTENTE → PRÊT → GÉNÉRÉ → TERMINÉ
+
+
+======================================================================
+BOUCLE MENSUELLE COMPLÈTE
+======================================================================
+
+MOIS M
+------
+1. État de paie
+       ↓
+2. OCR
+       ↓
+3. RAS salaires
+       ↓
+4. Validation
+       ↓
+5. Factures prestataires payées
+       ↓
+6. OCR + classification
+       ↓
+7. Calcul RAS prestations
+       ↓
+8. Validation
+       ↓
+9. Factures ventes + achats
+       ↓
+10. OCR + extraction TVA
+       ↓
+11. Calcul TVA
+       ↓
+12. Validation
+       ↓
+13. TAP / TFP / FOPROLOS automatiques
+       ↓
+14. Contrôle de complétude
+       ↓
+15. Assemblage déclaration mensuelle
+       ↓
+16. Génération PDF
+       ↓
+17. Téléchargement / dépôt e-DGII
+       ↓
+18. Mois M terminé
+
+
+MOIS M+1
+---------
+Les données permanentes sont conservées.
+Le crédit TVA éventuel du mois M est automatiquement récupéré.
+Les paramètres de l'entreprise restent disponibles.
+Le workflow recommence avec les nouveaux documents du mois M+1.
+
+
+======================================================================
+BOUCLE TRIMESTRIELLE
+======================================================================
+
+Mois 1 ──┐
+         ├── États de paie validés
+Mois 2 ──┤
+         ├── Données salariés
+Mois 3 ──┘
+              ↓
+       Construction grille CNSS
+              ↓
+       Calcul cotisations
+              ↓
+       Génération déclaration CNSS
+              ↓
+       Notification échéance
+              ↓
+       Déclaration trimestrielle terminée
+
+
+======================================================================
+STRUCTURE LOGIQUE DE LA BASE DE DONNÉES
+======================================================================
+
+1. ENTREPRISE
+-------------
+enterprise_id
+raison_sociale
+matricule_fiscal
+code_tva
+forme_juridique
+adresse
+code_activite
+is_annee_precedente
+taux_tap
+date_creation
+
+2. SALARIÉS
+-----------
+employee_id
+enterprise_id
+nom
+matricule_cnss
+salaire_brut_reference
+date_debut
+date_fin
+statut
+
+3. PÉRIODES
+-----------
+period_id
+enterprise_id
+mois
+annee
+statut_mensuel
+
+4. ÉTATS DE PAIE
+----------------
+payroll_id
+period_id
+total_brut
+total_irpp
+total_css
+document_source
+date_extraction
+date_validation
+statut
+
+5. RAS PRESTATIONS
+------------------
+withholding_id
+period_id
+prestataire
+matricule_fiscal
+nature_operation
+montant_ht
+taux_ras
+montant_ras
+document_source
+date_validation
+statut
+
+6. FACTURES VENTES
+------------------
+sales_invoice_id
+period_id
+client
+montant_ht
+taux_tva
+montant_tva
+date_facture
+reference
+document_source
+statut
+
+7. FACTURES ACHATS
+------------------
+purchase_invoice_id
+period_id
+fournisseur
+nature
+montant_ht
+taux_tva
+montant_tva
+date_facture
+reference
+document_source
+statut
+
+8. TVA
+-------
+vat_id
+period_id
+tva_collectee
+tva_deductible
+credit_precedent
+tva_due
+nouveau_credit
+date_validation
+statut
+
+9. TAXES AUTOMATIQUES
+---------------------
+taxes_id
+period_id
+ca_total
+taux_tap
+tap
+total_brut
+tfp
+foprolos
+statut
+
+10. DÉCLARATIONS
+----------------
+declaration_id
+enterprise_id
+period_id
+type_declaration
+total_ras
+total_tva
+total_tap
+total_tfp
+total_foprolos
+total_a_payer
+date_generation
+document_pdf
+statut
+
+11. CNSS
+---------
+cnss_id
+enterprise_id
+trimestre
+annee
+employee_id
+salaire_mois_1
+salaire_mois_2
+salaire_mois_3
+total_trimestre
+base_cnss
+taux_cnss
+cotisation_cnss
+date_generation
+document_pdf
+statut
+
+
+======================================================================
+MOTEUR DE VALIDATION
+======================================================================
+
+Chaque module doit suivre une logique de statut.
+
+STATUTS POSSIBLES
+------------------
+DRAFT
+→ Données en cours de traitement
+
+OCR_EXTRACTED
+→ Données extraites mais non confirmées
+
+NEEDS_REVIEW
+→ Incohérence ou donnée nécessitant une intervention
+
+VALIDATED
+→ Données confirmées par l'utilisateur
+
+CALCULATED
+→ Calcul automatique terminé
+
+READY
+→ Tous les prérequis sont satisfaits
+
+GENERATED
+→ Document PDF généré
+
+COMPLETED
+→ Workflow terminé
+
+ERROR
+→ Erreur technique ou donnée impossible à traiter
+
+RÈGLE CENTRALE
+--------------
+Aucune déclaration finale ne doit être générée si un module
+obligatoire est encore en DRAFT, NEEDS_REVIEW ou ERROR.
+
+
+======================================================================
+GESTION DES ERREURS ET EXCEPTIONS
+======================================================================
+
+OCR INCERTAIN
+-------------
+Si l'OCR n'est pas suffisamment fiable :
+→ afficher la donnée comme "À vérifier"
+→ demander une confirmation manuelle.
+
+FACTURE NON CLASSIFIÉE
+----------------------
+Si le système ne peut pas déterminer le type de prestation :
+→ ne pas appliquer automatiquement un taux définitif
+→ demander à l'utilisateur de sélectionner / confirmer la nature.
+
+TAUX INCONNU
+------------
+Si aucun taux applicable n'est trouvé :
+→ bloquer le calcul concerné
+→ afficher "Taux à confirmer".
+
+DOCUMENT ILLISIBLE
+------------------
+→ signaler le document
+→ demander un nouveau scan.
+
+DONNÉE MANQUANTE
+----------------
+→ identifier le champ manquant
+→ empêcher la validation du module tant que le champ obligatoire
+  n'est pas complété.
+
+INCOHÉRENCE DE CALCUL
+---------------------
+Le système doit effectuer des contrôles arithmétiques avant
+validation et signaler toute différence.
+
+EXEMPLE
+-------
+TVA déclarée sur facture ≠ HT × taux TVA
+→ "Incohérence détectée — vérifiez la facture."
+
+
+======================================================================
+NOTIFICATIONS
+======================================================================
+
+ONBOARDING
+----------
+Confirmation :
+"Votre entreprise est configurée."
+
+AVANT ÉCHÉANCE MENSUELLE
+------------------------
+"Votre déclaration mensuelle est à préparer."
+
+MODULES INCOMPLETS
+------------------
+"Il manque encore des informations pour finaliser votre déclaration."
+
+DÉCLARATION PRÊTE
+-----------------
+"Votre déclaration mensuelle est prête à être téléchargée."
+
+ÉCHÉANCE PROCHE
+---------------
+"Rappel : votre déclaration doit être déposée avant l'échéance
+applicable."
+
+CNSS
+----
+"Votre déclaration CNSS trimestrielle est prête."
+
+
+======================================================================
+EXPÉRIENCE UTILISATEUR — PARCOURS MINIMAL
+======================================================================
+
+PREMIÈRE FOIS
+-------------
+SCAN CIF + RNE
+→ Vérification
+→ Compléter 3 blocs d'informations
+→ Configuration terminée
+
+CHAQUE MOIS
+-----------
+SCAN ÉTAT DE PAIE
+→ Confirmer 3 montants
+
+SCAN FACTURES PRESTATAIRES
+→ Vérifier tableau RAS
+→ Confirmer
+
+SCAN FACTURES VENTES + ACHATS
+→ Vérifier tableau TVA
+→ Confirmer
+
+TAP / TFP / FOPROLOS
+→ Automatique
+
+DÉCLARATION MENSUELLE
+→ Vérifier récapitulatif
+→ Télécharger PDF
+→ Déposer
+
+CHAQUE TRIMESTRE
+----------------
+Aucune saisie supplémentaire
+→ CNSS construite automatiquement
+→ Vérifier si nécessaire
+→ Télécharger PDF
+→ Déposer
+
+
+======================================================================
+PRINCIPE PRODUIT — "SCAN → VÉRIFIER → VALIDER → DÉCLARER"
+======================================================================
+
+L'application doit réduire au minimum la saisie manuelle.
+
+1. SCAN
+   L'utilisateur fournit les documents.
+
+2. EXTRAIRE
+   OCR / traitement documentaire récupère les données.
+
+3. CLASSIFIER
+   Le système identifie la nature de l'opération.
+
+4. CALCULER
+   Les règles fiscales applicables produisent les montants.
+
+5. VÉRIFIER
+   Le système effectue des contrôles de cohérence.
+
+6. VALIDER
+   L'utilisateur confirme les données sensibles.
+
+7. ASSEMBLER
+   Les modules alimentent automatiquement la déclaration.
+
+8. GÉNÉRER
+   Le système produit les documents PDF.
+
+9. DÉPOSER
+   L'utilisateur télécharge et/ou dépose sur la plateforme
+   officielle correspondante.
+
+10. ARCHIVER
+    Les données, documents et déclarations restent accessibles
+    pour l'historique et les périodes suivantes.
+
+
+======================================================================
+POINTS À VALIDER AVANT MISE EN PRODUCTION
+======================================================================
+
+Les taux, échéances, règles de calcul et rubriques du formulaire
+officiel doivent être vérifiés contre la réglementation tunisienne
+applicable à la période concernée avant toute utilisation réelle.
+
+En particulier :
+- Taux RAS par nature d'opération
+- Taux TVA
+- Taux TAP
+- Taux TFP
+- Taux FOPROLOS
+- Taux et plafonds CNSS
+- Échéances mensuelles
+- Échéances CNSS
+- Structure exacte de la déclaration mensuelle
+- Règles relatives au crédit TVA
+- Traitement des non-résidents
+- Règles applicables aux achats forfaitaires
+- Conditions de déductibilité de la TVA
+- Format exact des PDF à générer
+
+Le moteur fiscal doit être conçu pour permettre la mise à jour
+des taux et règles sans modifier toute l'application.
+
+FIN DU WORKFLOW

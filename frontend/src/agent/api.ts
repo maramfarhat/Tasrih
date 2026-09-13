@@ -12,16 +12,22 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return (await res.json()) as T
 }
 
-export function getGuidance(step: number | null, context: AgentContext): Promise<AgentReply> {
-  return post<AgentReply>('/agent/guidance', { step, context: { ...context, step } })
+export function getGuidance(
+  step: number | null,
+  context: AgentContext,
+  lang = 'fr',
+): Promise<AgentReply> {
+  return post<AgentReply>('/agent/guidance', { step, context: { ...context, step }, lang })
 }
 
 export function askAgent(
   messages: Pick<ChatMessage, 'role' | 'text'>[],
   context: AgentContext,
+  lang = 'fr',
 ): Promise<AgentReply> {
   return post<AgentReply>('/agent/chat', {
     messages: messages.map((m) => ({ role: m.role, content: m.text })),
     context,
+    lang,
   })
 }

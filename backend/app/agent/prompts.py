@@ -36,7 +36,7 @@ RÈGLES DE CONTENU :
   dis-le et invite à vérifier auprès de la recette des finances ou d'un expert-comptable.
 - Tu es un assistant informatif : tu ne remplaces pas un comptable et tu le rappelles
   brièvement quand la question touche à une décision fiscale sensible.
-- Si l'utilisateur écrit en arabe, tu peux répondre en arabe tunisien simple.
+- Si l'utilisateur écrit en arabe, tu peux répondre en arabe standard simple (فصحى).
 """
 
 
@@ -76,12 +76,36 @@ def build_messages(
     history: list[dict[str, str]],
     context: dict[str, Any],
     guidance_text: str = "",
+    sources: list[dict[str, Any]] | None = None,
+    lang: str = "fr",
 ) -> list[dict[str, str]]:
     context_block = build_context_block(context, guidance_text)
     messages: list[dict[str, str]] = [
         {"role": "system", "content": PERSONA},
         {"role": "system", "content": context_block},
     ]
+    if lang == "ar":
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "L'utilisateur a choisi l'ARABE : réponds TOUJOURS en arabe standard "
+                    "clair et soutenu (اللغة العربية الفصحى), jamais en dialecte. Phrases "
+                    "courtes (1 à 3), sans liste ni emoji. Le texte sera lu à voix haute."
+                ),
+            }
+        )
+    if sources:
+        lines = ["EXTRAITS DU GUIDE OFFICIEL (guide déclaration mensuelle des impôts et taxes, Tunisie) :"]
+        for s in sources:
+            sec = f"§{s.get('section')} {s.get('title') or ''}".strip()
+            lines.append(f"- ({sec}) {str(s.get('text') or '')[:700]}")
+        lines.append(
+            "Appuie-toi uniquement sur ces extraits pour les faits fiscaux (taux, bases, délais). "
+            "Si l'information ne s'y trouve pas, dis-le et renvoie vers un expert-comptable. "
+            "N'invente aucun taux ni numéro de loi."
+        )
+        messages.append({"role": "system", "content": "\n".join(lines)})
     # garder un historique court (coût + latence)
     for msg in history[-10:]:
         role = msg.get("role")

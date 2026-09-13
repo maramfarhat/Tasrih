@@ -16,6 +16,11 @@ from app.config import BACKEND
 from app.declaration.models import FilledForm
 
 TEMPLATE = BACKEND / "data" / "templates" / "mensuelle2026.pdf"
+# Fallback: official blank imprimés shipped under docs/ (when data/ is empty / gitignored).
+_TEMPLATE_FALLBACKS = [
+    BACKEND.parent / "docs" / "declaration-mensuelle" / "imprime-officiel-2025.pdf",
+    BACKEND.parent / "docs" / "declaration-mensuelle" / "imprime-officiel-2023.pdf",
+]
 FONT_PATHS = [
     Path(r"C:\Windows\Fonts\arial.ttf"),
     Path(r"C:\Windows\Fonts\tahoma.ttf"),
@@ -104,6 +109,12 @@ def _mark(c: canvas.Canvas, x: float, y: float, on: bool) -> None:
     c.drawString(x, y, "X")
 
 
+def _mark_x(c: canvas.Canvas, x: float, y: float) -> None:
+    """Rubrique sans objet : champ laissé vide + X (au lieu d'une valeur)."""
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(x, y, "X")
+
+
 def _clean_address(address: str) -> tuple[str, str]:
     """Return (address_without_postal, postal_code)."""
     raw = re.sub(r"\s+", " ", (address or "").strip())
@@ -176,10 +187,45 @@ def _page1_overlay(filled: FilledForm) -> bytes:
     return buf.getvalue()
 
 
+def _page3_payroll_overlay(filled: FilledForm) -> bytes:
+    """Page 3 : TFP + FOPROLOS (assiette, taux, montant) + retenues à la source."""
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    a = filled.amounts
+    boxes = filled.checkboxes
+    if boxes.get("الأداء_على_التكوين_المهني"):
+        if a.tfp_amount:
+            _draw(c, 300, 700, f"{a.tfp_base:.3f}", 9)
+            _draw(c, 210, 700, f"{a.tfp_rate * 100:.0f}%", 9)
+            _draw(c, 90, 700, f"{a.tfp_amount:.3f}", 9)
+    else:
+        _mark_x(c, 90, 700)
+    if boxes.get("صندوق_النهوض_بالمسكن"):
+        if a.foprolos_amount:
+            _draw(c, 300, 600, f"{a.foprolos_base:.3f}", 9)
+            _draw(c, 210, 600, "1%", 9)
+            _draw(c, 90, 600, f"{a.foprolos_amount:.3f}", 9)
+    else:
+        _mark_x(c, 90, 600)
+    if boxes.get("خصم_من_المورد"):
+        if a.retenues_total:
+            _draw(c, 90, 500, f"{a.retenues_total:.3f}", 9)
+    else:
+        _mark_x(c, 90, 500)
+    c.save()
+    return buf.getvalue()
+
+
 def _page5_tva_overlay(filled: FilledForm) -> bytes:
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     a = filled.amounts
+    boxes = filled.checkboxes
+    if not boxes.get("الأداء_على_القيمة_المضافة"):
+        # TVA non applicable : rubrique marquée X (sans objet).
+        _mark_x(c, 55, 470)
+        c.save()
+        return buf.getvalue()
     if a.ca_ht_19:
         _draw(c, 270, 536, f"{a.ca_ht_19:.3f}", 9)
     if a.tva_collectee_19:
@@ -194,6 +240,10 @@ def _page5_tva_overlay(filled: FilledForm) -> bytes:
         _draw(c, 135, 500, f"{a.tva_collectee:.3f}", 9)
     if a.tva_deductible:
         _draw(c, 135, 485, f"{a.tva_deductible:.3f}", 9)
+    if a.tva_credit_report:
+        _draw(c, 55, 455, f"{a.tva_credit_report:.3f}", 9)
+    if a.tva_credit_next:
+        _draw(c, 55, 440, f"{a.tva_credit_next:.3f}", 9)
     c.save()
     return buf.getvalue()
 
@@ -205,12 +255,21 @@ def _page8_local_overlay(filled: FilledForm) -> bytes:
     boxes = filled.checkboxes
     if a.stamp_duty_total:
         _draw(c, 40, 780, f"{a.stamp_duty_total:.3f}", 9)
-    if boxes.get("المعلوم_على_النزل") and a.hotel_tax_base:
-        _draw(c, 280, 430, f"{a.hotel_tax_base:.3f}", 9)
-        _draw(c, 80, 430, f"{a.hotel_tax_amount:.3f}", 9)
-    if boxes.get("المعلوم_على_المؤسسات") and a.etablissement_tax_base:
-        _draw(c, 280, 390, f"{a.etablissement_tax_base:.3f}", 9)
-        _draw(c, 80, 390, f"{a.etablissement_tax_amount:.3f}", 9)
+    if a.stamp_duty_count:
+        _draw(c, 150, 780, str(a.stamp_duty_count), 9)
+    if boxes.get("المعلوم_على_النزل"):
+        if a.hotel_tax_base:
+            _draw(c, 280, 430, f"{a.hotel_tax_base:.3f}", 9)
+            _draw(c, 80, 430, f"{a.hotel_tax_amount:.3f}", 9)
+            _draw(c, 190, 430, f"{a.hotel_tax_rate * 100:.0f}%", 9)
+    else:
+        _mark_x(c, 80, 430)
+    if boxes.get("المعلوم_على_المؤسسات"):
+        if a.etablissement_tax_base:
+            _draw(c, 280, 390, f"{a.etablissement_tax_base:.3f}", 9)
+            _draw(c, 80, 390, f"{a.etablissement_tax_amount:.3f}", 9)
+    else:
+        _mark_x(c, 80, 390)
     c.save()
     return buf.getvalue()
 
@@ -221,15 +280,26 @@ def _merge_overlay(base_page, overlay_bytes: bytes):
     return base_page
 
 
+def _resolve_template() -> Path:
+    if TEMPLATE.exists():
+        return TEMPLATE
+    for path in _TEMPLATE_FALLBACKS:
+        if path.exists():
+            return path
+    raise FileNotFoundError(
+        f"Template manquant: {TEMPLATE} (ni imprimé 2025/2023 dans docs/declaration-mensuelle/)"
+    )
+
+
 def fill_official_pdf(filled: FilledForm, out_path: Path) -> Path:
-    if not TEMPLATE.exists():
-        raise FileNotFoundError(f"Template manquant: {TEMPLATE}")
-    reader = PdfReader(str(TEMPLATE))
+    template = _resolve_template()
+    reader = PdfReader(str(template))
     writer = PdfWriter()
 
     overlays = {
         0: _page1_overlay(filled),
-        4: _page5_tva_overlay(filled) if filled.checkboxes.get("الأداء_على_القيمة_المضافة") else None,
+        2: _page3_payroll_overlay(filled),
+        4: _page5_tva_overlay(filled),
         7: _page8_local_overlay(filled),
     }
 

@@ -10,6 +10,7 @@ type Options = {
   qIndex?: number | null
   context: AgentContext
   enabled?: boolean
+  lang?: string
   onSpeak?: (text: string, tone?: string) => void
   onReply?: (reply: AgentReply) => void
 }
@@ -19,6 +20,7 @@ export function useAssistant({
   qIndex = null,
   context,
   enabled = true,
+  lang = 'fr',
   onSpeak,
   onReply,
 }: Options) {
@@ -30,6 +32,11 @@ export function useAssistant({
   const cbRef = useRef({ onSpeak, onReply })
   const enabledRef = useRef(enabled)
   const keyRef = useRef<string | null>(null)
+  const langRef = useRef(lang)
+
+  useEffect(() => {
+    langRef.current = lang
+  }, [lang])
 
   useEffect(() => {
     ctxRef.current = context
@@ -51,12 +58,12 @@ export function useAssistant({
   useEffect(() => {
     if (!enabled) return
     // logged_in différencie l'accueil connecté de la page d'authentification (step 0)
-    const key = `${step}:${qIndex}:${ctxRef.current.logged_in ? 'in' : 'out'}`
+    const key = `${step}:${qIndex}:${ctxRef.current.logged_in ? 'in' : 'out'}:${langRef.current}`
     if (keyRef.current === key) return
     keyRef.current = key
     setBusy(true)
     if (import.meta.env.DEV) console.debug('[assistant] guidance →', key)
-    void getGuidance(step, { ...ctxRef.current, step, q_index: qIndex })
+    void getGuidance(step, { ...ctxRef.current, step, q_index: qIndex }, langRef.current)
       .then((reply) => {
         if (import.meta.env.DEV) console.debug('[assistant] guidance ✓', reply.reply.slice(0, 30))
         push({ id: uid(), role: 'assistant', text: reply.reply, suggestions: reply.suggestions })
@@ -67,7 +74,7 @@ export function useAssistant({
         if (import.meta.env.DEV) console.debug('[assistant] guidance ✗', String(e))
       })
       .finally(() => setBusy(false))
-  }, [step, qIndex, enabled, push])
+  }, [step, qIndex, enabled, push, context.logged_in])
 
   const send = useCallback(
     async (text: string) => {
@@ -79,6 +86,7 @@ export function useAssistant({
         const reply = await askAgent(
           msgsRef.current.map((m) => ({ role: m.role, text: m.text })),
           { ...ctxRef.current, step },
+          langRef.current,
         )
         push({ id: uid(), role: 'assistant', text: reply.reply, suggestions: reply.suggestions })
         cbRef.current.onReply?.(reply)

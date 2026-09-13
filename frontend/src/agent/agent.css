@@ -12,14 +12,14 @@
   cursor: pointer;
   background: linear-gradient(150deg, var(--sea) 0%, var(--sea-deep) 100%);
   color: #fff;
-  box-shadow: 0 12px 28px rgba(10, 79, 63, 0.35);
+  box-shadow: 0 12px 28px rgba(0, 31, 92, 0.32);
   display: grid;
   place-items: center;
   transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 .ag-launcher:hover {
   transform: translateY(-2px) scale(1.04);
-  box-shadow: 0 16px 34px rgba(10, 79, 63, 0.42);
+  box-shadow: 0 16px 34px rgba(0, 31, 92, 0.4);
 }
 .ag-launcher-face {
   position: relative;
@@ -34,7 +34,7 @@
   z-index: 1;
   border-radius: 50%;
   overflow: hidden;
-  background: linear-gradient(150deg, #e8f4ef 0%, #cfe8dd 100%);
+  background: linear-gradient(150deg, #e7eefb 0%, #cfe0f8 100%);
 }
 .ag-launcher-avatar canvas {
   display: block;
@@ -43,7 +43,7 @@
   position: absolute;
   inset: -6px;
   border-radius: 50%;
-  border: 2px solid rgba(13, 107, 84, 0.4);
+  border: 2px solid rgba(0, 86, 179, 0.4);
   opacity: 0;
   transition: transform 0.08s linear, opacity 0.2s;
 }
@@ -67,48 +67,15 @@
   place-items: center;
 }
 
-/* — nudge (bulle quand fermé) — */
-.ag-nudge {
-  position: fixed;
-  right: 1.5rem;
-  bottom: 6rem;
-  z-index: 59;
-  max-width: 300px;
-  text-align: left;
-  padding: 0.7rem 0.9rem;
-  border-radius: 16px 16px 4px 16px;
-  border: 1px solid var(--line);
-  background: #fff;
-  color: var(--ink);
-  box-shadow: 0 10px 26px rgba(18, 38, 31, 0.16);
-  cursor: pointer;
-  animation: ag-rise 0.25s ease;
-}
-.ag-nudge-name {
-  display: block;
-  font-weight: 700;
-  font-size: 0.78rem;
-  color: var(--sea);
-  margin-bottom: 0.15rem;
-}
-.ag-nudge-text {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  font-size: 0.85rem;
-  color: var(--ink-soft);
-}
-
 /* — panneau — */
 .ag-panel {
   position: fixed;
   right: 1.5rem;
   bottom: 6rem;
   z-index: 61;
-  width: 360px;
+  width: 380px;
   max-width: calc(100vw - 2rem);
-  height: min(600px, calc(100vh - 9rem));
+  height: min(720px, calc(100vh - 8rem));
   display: flex;
   flex-direction: column;
   border-radius: 20px;
@@ -194,21 +161,24 @@
 /* — scène avatar — */
 .ag-stage {
   position: relative;
-  flex: 0 0 200px;
+  flex: 0 0 auto;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  max-height: 380px;
   display: block;
   overflow: hidden;
   background:
-    radial-gradient(circle at 50% 22%, #d9efe6 0%, #eaf5f0 55%, #dcece5 100%);
+    radial-gradient(circle at 50% 28%, #dbe7f7 0%, #eef3fb 55%, #e3ebf7 100%);
 }
 .ag-stage-glow {
   position: absolute;
   left: 50%;
-  bottom: -40%;
-  width: 220px;
-  height: 220px;
+  bottom: -35%;
+  width: 280px;
+  height: 280px;
   transform: translateX(-50%);
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(13, 107, 84, 0.16) 0%, transparent 65%);
+  background: radial-gradient(circle, rgba(0, 86, 179, 0.16) 0%, transparent 65%);
   pointer-events: none;
 }
 .ag-stage canvas {
@@ -317,16 +287,14 @@
     left: 0.5rem;
     bottom: 5.5rem;
     width: auto;
-    height: min(70vh, 560px);
+    height: min(78vh, 640px);
+  }
+  .ag-stage {
+    max-height: 260px;
   }
   .ag-launcher {
     right: 0.9rem;
     bottom: 0.9rem;
-  }
-  .ag-nudge {
-    right: 0.9rem;
-    left: 0.9rem;
-    max-width: none;
   }
 }
 
@@ -382,27 +350,4 @@
   line-height: 1.35;
   text-align: center;
   backdrop-filter: blur(2px);
-}
-.ag-caption-bubble {
-  position: fixed;
-  right: 6.2rem;
-  bottom: 1.6rem;
-  z-index: 59;
-  max-width: 320px;
-  padding: 0.6rem 0.8rem;
-  border-radius: 16px 16px 4px 16px;
-  background: #0a2821;
-  color: #fff;
-  font-size: 0.85rem;
-  line-height: 1.35;
-  box-shadow: 0 12px 28px rgba(10, 40, 33, 0.3);
-  animation: ag-rise 0.2s ease;
-}
-@media (max-width: 520px) {
-  .ag-caption-bubble {
-    right: 0.9rem;
-    left: 0.9rem;
-    bottom: 5.6rem;
-    max-width: none;
-  }
 }

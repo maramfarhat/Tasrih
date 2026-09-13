@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
  */
 export type SpeechStatus = 'idle' | 'loading' | 'speaking'
 
-export function useSpeech(ttsUrl = '/api/agent/tts') {
+export function useSpeech(ttsUrl = '/api/agent/tts', lang = 'fr') {
   const [status, setStatus] = useState<SpeechStatus>('idle')
   const [muted, setMuted] = useState(false)
   const [level, setLevel] = useState(0)
@@ -27,6 +27,7 @@ export function useSpeech(ttsUrl = '/api/agent/tts') {
   const rafRef = useRef<number | null>(null)
   const mutedRef = useRef(muted)
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null)
+  const langRef = useRef(lang)
   const activeRef = useRef(0)
   const unlockedRef = useRef(false)
   const pendingRef = useRef<{ text: string; tone?: string } | null>(null)
@@ -52,20 +53,22 @@ export function useSpeech(ttsUrl = '/api/agent/tts') {
     }
   }, [muted])
 
-  // choisir une voix française quand elle devient disponible
+  // choisir une voix dans la langue courante quand elle devient disponible
   useEffect(() => {
+    langRef.current = lang
     if (typeof window === 'undefined' || !window.speechSynthesis) return
+    const want = lang === 'ar' ? /^ar(-|_)/i : /^fr(-|_)/i
     const pick = () => {
       const voices = window.speechSynthesis.getVoices()
       voiceRef.current =
-        voices.find((v) => /^fr(-|_)/i.test(v.lang) && /google|natural|premium/i.test(v.name)) ||
-        voices.find((v) => /^fr(-|_)/i.test(v.lang)) ||
+        voices.find((v) => want.test(v.lang) && /google|natural|premium/i.test(v.name)) ||
+        voices.find((v) => want.test(v.lang)) ||
         null
     }
     pick()
     window.speechSynthesis.addEventListener('voiceschanged', pick)
     return () => window.speechSynthesis.removeEventListener('voiceschanged', pick)
-  }, [])
+  }, [lang])
 
   const stopLevelLoop = useCallback(() => {
     if (rafRef.current !== null) {
@@ -76,6 +79,8 @@ export function useSpeech(ttsUrl = '/api/agent/tts') {
 
   const stop = useCallback(() => {
     activeRef.current += 1
+    // jette aussi un éventuel message en attente (pas encore débloqué/parlé)
+    pendingRef.current = null
     stopLevelLoop()
     try {
       window.speechSynthesis?.cancel()
@@ -140,7 +145,7 @@ export function useSpeech(ttsUrl = '/api/agent/tts') {
       }
       synth.cancel()
       const utter = new SpeechSynthesisUtterance(text)
-      utter.lang = 'fr-FR'
+      utter.lang = langRef.current === 'ar' ? 'ar-TN' : 'fr-FR'
       utter.rate = 1
       utter.pitch = 1
       if (voiceRef.current) utter.voice = voiceRef.current
@@ -176,6 +181,19 @@ export function useSpeech(ttsUrl = '/api/agent/tts') {
         return
       }
 
+      // Coupe toute lecture en cours avant de démarrer la nouvelle :
+      // évite deux voix superposées quand l'étape change ou qu'on enchaîne.
+      try {
+        sourceRef.current?.stop()
+      } catch {
+        /* ignore */
+      }
+      sourceRef.current = null
+      try {
+        window.speechSynthesis?.cancel()
+      } catch {
+        /* ignore */
+      }
       activeRef.current += 1
       const token = activeRef.current
       stopLevelLoop()
@@ -186,7 +204,7 @@ export function useSpeech(ttsUrl = '/api/agent/tts') {
         const res = await fetch(ttsUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: clean, tone: tone ?? 'neutral' }),
+          body: JSON.stringify({ text: clean, tone: tone ?? 'neutral', lang: langRef.current }),
         })
         if (res.ok && (res.headers.get('content-type') || '').includes('audio')) {
           const buf = await res.arrayBuffer()

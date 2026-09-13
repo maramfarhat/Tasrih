@@ -1,0 +1,330 @@
+"""Données de référence curées depuis le « Guide technique — Déclaration mensuelle ».
+
+Ce fichier est la source de vérité du référentiel : taux de TVA, 31 lignes de retenue
+à la source, taxes et fonds, documents à fournir, et le REGISTRE DES CHAMPS connus qui
+sert à valider/normaliser les valeurs extraites d'une photo.
+
+Les montants/taux proviennent du guide (Code TVA, CDPF, IRPP/IS, LF 2026). Toute
+incertitude réglementaire doit être signalée à l'utilisateur — ne jamais inventer.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+SOURCE = "Guide technique — Déclaration mensuelle des impôts et taxes (Tunisie)"
+
+# ---------------------------------------------------------------------------
+# Taxe sur la valeur ajoutée
+# ---------------------------------------------------------------------------
+VAT_RATES = [
+    (0.0, "Exonéré / hors champ", "exonere", "Exportations, opérations exonérées, hors champ."),
+    (7.0, "TVA 7 %", "reduit", "Produits/services listés au tableau B annexé au Code TVA (santé, première nécessité…)."),
+    (13.0, "TVA 13 %", "intermediaire", "Taux intermédiaire."),
+    (19.0, "TVA 19 %", "standard", "Taux de droit commun."),
+    (6.0, "TVA 6 %", "transitoire", "Taux particulier transitoire / activité spécifique."),
+    (12.0, "TVA 12 %", "transitoire", "Taux particulier transitoire / activité spécifique."),
+    (18.0, "TVA 18 %", "transitoire", "Taux particulier transitoire / activité spécifique."),
+]
+
+# ---------------------------------------------------------------------------
+# Lignes de retenue à la source (tableau 31)
+# ---------------------------------------------------------------------------
+WITHHOLDING_LINES: list[dict[str, Any]] = [
+    {"line_no": 1, "nature": "Salaires/pensions/rentes viagères déjà retenus selon le barème IRPP", "base": "Salaire net imposable mensuel", "rate": "Barème progressif IRPP (art. 44 Code IRPP/IS)", "reference": "Retenue de droit commun sur salaires", "pieces": "Livre de paie, grille de calcul IRPP salariés"},
+    {"line_no": 2, "nature": "Salaires, avantages en nature versés à des non-résidents (étrangers)", "base": "Montant brut versé", "rate": "20 % (25 % si la charge fiscale est prise en charge par l'employeur)", "reference": "Entreprises exportatrices, offshore, banques non-résidentes", "pieces": "Contrat de travail, avenants, bulletins de paie du salarié étranger"},
+    {"line_no": 3, "nature": "Contribution sociale de solidarité (CSS) sur salaires", "base": "Salaire, pension, rente", "rate": "Taux additionnel spécifique", "reference": "Exonération si revenu annuel net ≤ 5 000 DT/an", "pieces": "Attestation de situation de famille"},
+    {"line_no": 4, "nature": "Commissions, courtages, loyers, honoraires liés à activités non commerciales", "base": "Montant HT versé", "rate": "10 % (résidents personnes physiques et morales) ; 15 % non-résidents (17,64 % si charge assumée)", "reference": "", "pieces": "Factures/contrats de location, de courtage"},
+    {"line_no": 5, "nature": "Honoraires à personnes physiques non soumises au régime réel", "base": "Montant versé", "rate": "10 %", "reference": "", "pieces": "Facture, attestation de régime forfaitaire"},
+    {"line_no": 6, "nature": "Honoraires à personnes morales (IS) et personnes physiques au régime réel", "base": "Montant versé", "rate": "3 %", "reference": "", "pieces": "Facture, RIB fournisseur"},
+    {"line_no": 7, "nature": "Rémunérations à artistes et créateurs", "base": "Montant versé", "rate": "5 %", "reference": "Y compris cession de droits d'auteur via organismes de gestion collective", "pieces": "Contrat, facture/quittance de droits d'auteur"},
+    {"line_no": 8, "nature": "Loyers d'hôtels versés à personnes morales/physiques régime réel", "base": "Montant versé", "rate": "5 %", "reference": "", "pieces": "Contrat de bail"},
+    {"line_no": 9, "nature": "Rémunérations liées à la performance dans la prestation de services", "base": "Montant versé", "rate": "10 %", "reference": "", "pieces": "Contrat de prestation"},
+    {"line_no": 10, "nature": "Intérêts de dépôts d'épargne (banques, CENT), emprunts obligataires, bons du Trésor, emprunts nationaux", "base": "Montant des intérêts", "rate": "20 % (25 % si charge assumée par le débiteur)", "reference": "Réduit par convention si < 20 %", "pieces": "Relevé bancaire, avis de crédit d'intérêts"},
+    {"line_no": 11, "nature": "Autres revenus de capitaux mobiliers (résidents/non-résidents, personnes physiques/morales)", "base": "Montant versé", "rate": "20 % (25 % si charge assumée)", "reference": "", "pieces": "Décision d'assemblée générale, avis de paiement"},
+    {"line_no": 12, "nature": "Dividendes", "base": "Montant distribué", "rate": "10 % (11,11 % si charge assumée) résidents ; même taux non-résidents personnes physiques et morales avec plafond", "reference": "Exonérés partiellement selon régime mère-fille le cas échéant", "pieces": "PV d'AGO de distribution, registre des actionnaires"},
+    {"line_no": 13, "nature": "Jetons de présence / rémunérations des membres de conseils, organes, commissions", "base": "Montant versé", "rate": "20 % (25 % si charge assumée)", "reference": "", "pieces": "PV du conseil d'administration"},
+    {"line_no": 14, "nature": "Rémunérations occasionnelles/accessoires (salariés ou non) hors activité principale", "base": "Montant versé", "rate": "15 %", "reference": "", "pieces": "Contrat/bon de commande ponctuel"},
+    {"line_no": 15, "nature": "Intérêts de prêts à des établissements bancaires non établis en Tunisie", "base": "Montant des intérêts", "rate": "10 % (11,11 % si charge assumée)", "reference": "Réduit par convention si < 10 %", "pieces": "Contrat de prêt"},
+    {"line_no": 16, "nature": "Prix de cession d'immeubles / droits sociaux immobiliers (déclaré dans l'acte)", "base": "Prix de cession déclaré", "rate": "2,5 % résidents ; 2,5 % (2,56 %) non-résidents personnes physiques ; 15 % (17,64 %) non-résidents personnes morales sur immeubles et droits sociaux", "reference": "Cession de biens immeubles bâtis/non bâtis, fonds de commerce, parts de sociétés civiles immobilières", "pieces": "Acte de cession, quittance notariale/du receveur"},
+    {"line_no": 17, "nature": "Acquisitions de biens, matériels, équipements, services ≥ 1 000 DT TTC", "base": "Montant TTC de l'acquisition", "rate": "1 % (sociétés à l'IS taux 20 %) ; 0,5 % (sociétés à l'IS taux 10 %) ; 0,5 % (entreprises individuelles abattement 2/3) ; 1,5 % (autres)", "reference": "Exclusions : téléphone, eau, électricité, gaz, assurances, leasing, ijara, mourabaha, istisna, salam", "pieces": "Factures fournisseurs classées par seuil"},
+    {"line_no": 18, "nature": "Paiements à l'État/collectivités locales/EPA/EPIC ≥ 1 000 DT TTC", "base": "Montant TTC", "rate": "25 %", "reference": "Idem exclusions que ligne 17", "pieces": "Bon de commande public, facture"},
+    {"line_no": 19, "nature": "Opérations avec des personnes n'ayant pas d'établissement en Tunisie", "base": "Montant versé TTC", "rate": "100 %", "reference": "Retenue libératoire totale", "pieces": "Facture du prestataire étranger, contrat"},
+    {"line_no": 20, "nature": "Rémunérations versées à des non-résidents établis en Tunisie pour travaux de construction/montage/services ≤ 6 mois", "base": "Chiffre d'affaires HT ou marché", "rate": "5 % (construction) / 10 % (montage) / 15 % (autres services)", "reference": "Taux majorés si charge assumée (5,26/11,11/17,64 %)", "pieces": "Contrat de marché, attestation de durée"},
+    {"line_no": 21, "nature": "Montants versés à des non-résidents actifs via établissement stable, sans dépôt de déclaration d'existence", "base": "Montant versé", "rate": "25 % (33,33 % si pays à régime fiscal privilégié) / 15 % (17,64 %) autres établissements stables", "reference": "Liste des pays à fiscalité privilégiée (arrêté 25/03/2019, modifié 26/09/2022)", "pieces": "Preuve du lieu de résidence du bénéficiaire"},
+    {"line_no": 22, "nature": "Avance sur ventes des industriels/grossistes à personnes physiques au régime forfaitaire (BIC) ou base forfaitaire (BNC)", "base": "Montant brut facturé (hors produits à prix administrés)", "rate": "1 %", "reference": "", "pieces": "Facture de vente en gros"},
+    {"line_no": 23, "nature": "Avance sur ventes de fabricants/embouteilleurs de vins, bières, alcools", "base": "Montant brut facturé", "rate": "5 %", "reference": "Applicable depuis le 1er janvier 2023", "pieces": "Facture de vente"},
+    {"line_no": 24, "nature": "Plus-value de cession d'actions/parts sociales par des non-résidents non établis", "base": "Plus-value nette (après frais)", "rate": "10 % personnes physiques (11,11 % si charge assumée, plafonné à 2,5 % du prix de cession) ; 20 % personnes morales (25 % si charge assumée, plafonné à 5 %)", "reference": "", "pieces": "Acte de cession, calcul de plus-value"},
+    {"line_no": 25, "nature": "Autres rémunérations à des non-résidents non établis", "base": "Montant versé", "rate": "15 % (17,64 % si charge assumée)", "reference": "", "pieces": "Facture/contrat"},
+    {"line_no": 26, "nature": "Rémunérations à des personnes résidentes/établies dans un pays à régime fiscal privilégié", "base": "Montant versé", "rate": "25 % (33,33 % si charge assumée)", "reference": "", "pieces": "Justificatif du pays du bénéficiaire"},
+    {"line_no": 27, "nature": "Commission des distributeurs agréés des opérateurs de télécom", "base": "Montant de la commission", "rate": "1,5 % (personnes physiques) / 1 % (personnes morales)", "reference": "", "pieces": "Contrat de distribution"},
+    {"line_no": 28, "nature": "Droits d'enregistrement sur marchés publics", "base": "0,5 % de la valeur globale du marché", "rate": "0,5 %", "reference": "Retenu sur le premier paiement puis sur les paiements ultérieurs si besoin", "pieces": "Contrat de marché public"},
+    {"line_no": 29, "nature": "Gains de jeux de pari, hasard, loterie", "base": "Montant du gain", "rate": "25 % (33,33 % si charge assumée)", "reference": "Hors paris hippiques/pronostics sportifs organisés par organismes publics", "pieces": "Bordereau de gain"},
+    {"line_no": 30, "nature": "Ventes des industriels/commerçants au profit des intervenants dans la distribution", "base": "Montant TTC facturé", "rate": "3 %", "reference": "Plafond 20 000 DT/an", "pieces": "Facture de vente"},
+    {"line_no": 31, "nature": "Montants versés par les prestataires de livraison aux vendeurs en ligne sans carte d'identifiant fiscal", "base": "Montant versé (TVA comprise), sans seuil", "rate": "3 %", "reference": "Depuis le 1er janvier 2025", "pieces": "Relevé des paiements de la plateforme"},
+]
+
+# ---------------------------------------------------------------------------
+# Taxes, fonds et droits (sections 2 à 10)
+# ---------------------------------------------------------------------------
+TAXES: list[dict[str, Any]] = [
+    {"code": "TFP", "name_fr": "Taxe de formation professionnelle", "section": "2",
+     "base": "Masse salariale brute du mois (salaires, indemnités, avantages en nature)",
+     "rate": "1 % (industries manufacturières) / 2 % (autres activités)", "rate_value": None, "rate_unit": "percent_tiered",
+     "conditions": "Dépenses réelles de formation imputables (avance), régularisation annuelle en janvier.",
+     "pieces": "Livre de paie, factures des formations, décision d'agrément si applicable"},
+    {"code": "FOPROLOS", "name_fr": "Fonds de promotion du logement pour les salariés", "section": "3",
+     "base": "Masse salariale brute du mois (même assiette que la TFP)",
+     "rate": "1 %", "rate_value": 1.0, "rate_unit": "percent",
+     "conditions": "Exonérations spécifiques (entreprises totalement exportatrices sous conditions).",
+     "pieces": "Livre de paie, attestation d'exonération éventuelle"},
+    {"code": "DROIT_CONSO", "name_fr": "Droit de consommation", "section": "4",
+     "base": "CA hors droit de consommation et hors TVA sur les produits soumis",
+     "rate": "Tarif spécifique (ad valorem ou montant fixe/unité) selon la position tarifaire", "rate_value": None, "rate_unit": "tariff",
+     "conditions": "Déductible : droit payé en amont sur achats/importations de matières entrant dans des produits taxés.",
+     "pieces": "Factures de vente des produits taxés, DAU d'importation, tarif par position tarifaire"},
+    {"code": "TVA", "name_fr": "Taxe sur la valeur ajoutée", "section": "5",
+     "base": "CA hors TVA de l'opération imposable, ventilé par taux (collectée) ; dépenses nécessaires à l'exploitation (déductible)",
+     "rate": "7 % / 13 % / 19 % (droit commun), taux particuliers 6/12/18 %", "rate_value": None, "rate_unit": "percent_tiered",
+     "conditions": "Retenue TVA 25 % sur montants ≥ 1 000 DT ; TVA sur non-établis 100 % ; crédit reportable.",
+     "pieces": "Registres ventes/achats par taux, DAU, tableau de ventilation CA exonéré/exporté, avoirs, décisions de remboursement"},
+    {"code": "TIMBRE", "name_fr": "Droit de timbre fiscal", "section": "6",
+     "base": "Nature et nombre de documents/tickets", "rate": "Variable : 1 DT facture/traite, 5 DT billet transport international, 10 DT certificat véhicule, 1,5–2 DT grandes surfaces, 100 millimes/ticket grande surface",
+     "rate_value": None, "rate_unit": "fixed",
+     "conditions": "Téléphonie/internet reporté de l'annexe des opérateurs.",
+     "pieces": "Registre des tickets/factures émis, relevé par catégorie et succursale"},
+    {"code": "TAXE_HOTEL", "name_fr": "Taxe hôtelière (المعلوم على النزل)", "section": "7",
+     "base": "Chiffre d'affaires brut de l'établissement hôtelier", "rate": "2 %", "rate_value": 2.0, "rate_unit": "percent",
+     "conditions": "", "pieces": "Journal des recettes de l'hôtel/restaurant classé"},
+    {"code": "TCL", "name_fr": "Taxe sur les établissements à caractère industriel, commercial ou professionnel", "section": "8",
+     "base": "CA local/export selon régime", "rate": "0,1 % (produits à prix réglementés, marge ≤ 6 %) ; 25 % de l'IRPP/IS dû (option) ; 0,2 % CA local brut + 0,1 % export (droit commun)",
+     "rate_value": None, "rate_unit": "percent_tiered",
+     "conditions": "Minimum/maximum annuels ; répartition entre collectivités locales (pages 11-12 du formulaire).",
+     "pieces": "CA mensuel par commune, liste des locaux/succursales avec superficie et commune, dernière liasse IRPP/IS"},
+    {"code": "LICENCE_BOISSONS", "name_fr": "Taxe de licence sur les débits de boissons", "section": "9",
+     "base": "Nombre d'établissements par catégorie et par commune",
+     "rate": "300 DT (classe 1) / 150 DT (classe 2) / 25 DT (classe 3) — tarif annuel", "rate_value": None, "rate_unit": "fixed_annual",
+     "conditions": "Réparti mensuellement ou selon l'échéance propre à la taxe.",
+     "pieces": "Liste des débits exploités, classement, commune de rattachement"},
+    {"code": "FDC_COMPETITIVITE", "name_fr": "Fonds de développement de la compétitivité (industrie/services/artisanat)", "section": "10",
+     "base": "CA hors TVA", "rate": "1 %", "rate_value": 1.0, "rate_unit": "percent", "conditions": "", "pieces": ""},
+    {"code": "FDC_AGRI_PECHE", "name_fr": "Fonds de développement (agriculture/pêche)", "section": "10",
+     "base": "CA ou quantité", "rate": "2 % / 2,5 % / 2 % / 0,050 DT/kg", "rate_value": None, "rate_unit": "mixed", "conditions": "", "pieces": ""},
+    {"code": "FDC_TOURISME", "name_fr": "Fonds de développement (tourisme)", "section": "10",
+     "base": "CA hôtels/restaurants classés", "rate": "1 %", "rate_value": 1.0, "rate_unit": "percent", "conditions": "", "pieces": ""},
+    {"code": "TAXE_VOLS_INTL", "name_fr": "Taxe sur vols internationaux", "section": "10",
+     "base": "Par passager", "rate": "60 DT (1ère classe/affaires) ou 40 DT (autres)", "rate_value": None, "rate_unit": "fixed", "conditions": "", "pieces": ""},
+    {"code": "FONDS_TELECOM", "name_fr": "Redevance fonds des télécommunications", "section": "10",
+     "base": "CA", "rate": "5 %", "rate_value": 5.0, "rate_unit": "percent", "conditions": "", "pieces": ""},
+    {"code": "FNE", "name_fr": "Fonds national de l'emploi (thé/café, ciment)", "section": "10",
+     "base": "Quantité", "rate": "0,150 DT/kg ; 2 DT/tonne ; 1 DT/tonne", "rate_value": None, "rate_unit": "fixed", "conditions": "", "pieces": ""},
+    {"code": "CONTRIB_TOMATES", "name_fr": "Contribution tomates industrielles", "section": "10",
+     "base": "Quantité", "rate": "0,005 DT/kg (producteurs) ; 0,028 DT/kg (transformateurs)", "rate_value": None, "rate_unit": "fixed", "conditions": "", "pieces": ""},
+    {"code": "FONDS_POLLUTION", "name_fr": "Fonds de lutte contre la pollution", "section": "10",
+     "base": "CA hors taxes", "rate": "7 %", "rate_value": 7.0, "rate_unit": "percent", "conditions": "", "pieces": ""},
+    {"code": "FONDS_ENERGIE", "name_fr": "Fonds de transition énergétique", "section": "10",
+     "base": "Puissance/CA", "rate": "10 DT/1000W ; 60 % ; barème spécifique", "rate_value": None, "rate_unit": "mixed", "conditions": "", "pieces": ""},
+    {"code": "TAXE_JEUX", "name_fr": "Taxe sur jeux/concours via moyens de télécommunication", "section": "10",
+     "base": "Prix de participation", "rate": "40 %", "rate_value": 40.0, "rate_unit": "percent", "conditions": "", "pieces": ""},
+    {"code": "FONDS_CREATION", "name_fr": "Fonds d'encouragement à la création littéraire et artistique", "section": "10",
+     "base": "CA hors taxes", "rate": "1 %", "rate_value": 1.0, "rate_unit": "percent", "conditions": "", "pieces": ""},
+    {"code": "FONDS_REPOS_PECHE", "name_fr": "Fonds de repos biologique (pêche)", "section": "10",
+     "base": "—", "rate": "1 %", "rate_value": 1.0, "rate_unit": "percent", "conditions": "", "pieces": ""},
+    {"code": "CAISSE_COMPENSATION", "name_fr": "Redevance de soutien (Caisse Générale de Compensation)", "section": "10",
+     "base": "CA hors taxes", "rate": "3 % ou 5 % selon activité", "rate_value": None, "rate_unit": "percent_tiered",
+     "conditions": "Hôtellerie/bars/restaurants classés, discothèques.", "pieces": ""},
+    {"code": "TAXE_SOLIDARITE", "name_fr": "Taxe de solidarité (dommages agricoles)", "section": "10",
+     "base": "Valeur", "rate": "1 %", "rate_value": 1.0, "rate_unit": "percent", "conditions": "", "pieces": ""},
+    {"code": "TAXE_SEJOUR", "name_fr": "Taxe de séjour (établissements touristiques)", "section": "10",
+     "base": "Par nuitée, selon classement (2/3/4-5 étoiles) et nationalité", "rate": "1 à 12 DT/nuitée, plafonné à 10 nuitées consécutives", "rate_value": None, "rate_unit": "fixed", "conditions": "", "pieces": ""},
+    {"code": "FONDS_SANTE", "name_fr": "Fonds d'appui à la santé publique", "section": "10",
+     "base": "CA cliniques privées hors taxes", "rate": "1 %", "rate_value": 1.0, "rate_unit": "percent", "conditions": "", "pieces": ""},
+    {"code": "TAXE_SUCRE", "name_fr": "Taxe sur le sucre", "section": "10",
+     "base": "Quantité", "rate": "0,100 DT/kg", "rate_value": 0.1, "rate_unit": "fixed", "conditions": "", "pieces": ""},
+    {"code": "TAXE_LAIT", "name_fr": "Taxe sur dérivés du lait", "section": "10",
+     "base": "Quantité", "rate": "1,5 à 3 DT/kg selon produit", "rate_value": None, "rate_unit": "fixed", "conditions": "", "pieces": ""},
+    {"code": "CNAM_RECHARGE", "name_fr": "Compte de diversification de la sécurité sociale (recharge/location voitures)", "section": "10",
+     "base": "Par opération", "rate": "0,100 DT/recharge ≥ 5 DT ; 2 DT/jour/voiture", "rate_value": None, "rate_unit": "fixed", "conditions": "", "pieces": ""},
+    {"code": "FONDS_HANDICAPES", "name_fr": "Fonds de promotion des personnes handicapées", "section": "10",
+     "base": "Base spécifique", "rate": "1 %", "rate_value": 1.0, "rate_unit": "percent", "conditions": "", "pieces": ""},
+]
+
+# ---------------------------------------------------------------------------
+# Documents à préparer chaque mois (synthèse du guide)
+# ---------------------------------------------------------------------------
+REQUIRED_DOCUMENTS = [
+    ("Comptabilité", "Balance et grand livre du mois", None),
+    ("Comptabilité", "Journal des ventes", None),
+    ("Comptabilité", "Journal des achats", None),
+    ("Paie", "Livre de paie", None),
+    ("Paie", "Bulletins de salaire", None),
+    ("Paie", "Contrats des salariés étrangers le cas échéant", None),
+    ("Factures", "Ventes classées par taux de TVA", None),
+    ("Factures", "Achats classés par nature (retenue à la source + déductibilité TVA)", None),
+    ("Factures", "Factures ≥ 1000 DT identifiées séparément", None),
+    ("Contrats", "Baux, prestations de service, marchés publics, prêts, conventions de non double imposition", None),
+    ("Douane", "DAU d'importation/exportation si opérations internationales", None),
+    ("Bancaire", "Avis de crédit d'intérêts, RIB fournisseurs", None),
+    ("Juridique", "PV d'assemblées (dividendes, jetons de présence), actes de cession", None),
+    ("Attestations", "Attestations de régime (forfaitaire/réel), d'exonération, décisions de remboursement de crédit TVA", None),
+    ("Géographie", "Liste des locaux/succursales par commune avec superficie (TCL, taxe hôtelière)", None),
+]
+
+# ---------------------------------------------------------------------------
+# Registre des champs connus (doc_type, field_key, label_fr, type, required,
+# enum, regex, model_path, description)
+# ---------------------------------------------------------------------------
+F = dict[str, Any]  # raccourci lisibilité
+
+
+def _field(doc_type, key, label, vtype, required=0, enum=None, regex=None, model="", desc=""):
+    return {
+        "doc_type": doc_type,
+        "field_key": key,
+        "label_fr": label,
+        "label_ar": "",
+        "value_type": vtype,
+        "required": required,
+        "enum_values": json.dumps(enum, ensure_ascii=False) if enum else None,
+        "regex": regex,
+        "model_path": model,
+        "description": desc,
+    }
+
+
+DECLARATION_FIELDS = [
+    # --- Carte d'identification fiscale ---
+    _field("cif", "tax_id", "Matricule fiscal", "text", 1, regex=r"^\d{7}[A-Za-z/].*$", model="CIFExtract.tax_id", desc="7 chiffres + lettre (ex. 1290021/A)."),
+    _field("cif", "vat_code", "Code TVA", "text", 0, model="CIFExtract.vat_code"),
+    _field("cif", "category_code", "Code catégorie", "text", 0, model="CIFExtract.category_code"),
+    _field("cif", "secondary_establishment", "Établissement secondaire", "text", 0, model="CIFExtract.secondary_establishment"),
+    _field("cif", "name", "Nom / raison sociale", "text", 0, model="CIFExtract.name"),
+    _field("cif", "main_activity", "Activité principale", "text", 0, model="CIFExtract.main_activity"),
+    _field("cif", "secondary_activity", "Activité secondaire", "text", 0, model="CIFExtract.secondary_activity"),
+    _field("cif", "address", "Adresse", "text", 0, model="CIFExtract.address"),
+    _field("cif", "activity_start_date", "Date de début d'activité", "date", 0, model="CIFExtract.activity_start_date"),
+    _field("cif", "vat_status", "Statut TVA", "text", 0, model="CIFExtract.vat_status"),
+    _field("cif", "subject_to_vat", "Assujetti à la TVA", "boolean", 0, model="CIFExtract.subject_to_vat"),
+    # --- Extrait RNE ---
+    _field("rne", "rne_identifier", "Identifiant RNE", "text", 0, model="RNEExtract.rne_identifier"),
+    _field("rne", "old_commercial_register", "Ancien registre de commerce", "text", 0, model="RNEExtract.old_commercial_register"),
+    _field("rne", "company_name", "Dénomination sociale", "text", 0, model="RNEExtract.company_name"),
+    _field("rne", "commercial_name", "Nom commercial", "text", 0, model="RNEExtract.commercial_name"),
+    _field("rne", "commercial_name_latin", "Nom commercial (latin)", "text", 0, model="RNEExtract.commercial_name_latin"),
+    _field("rne", "legal_form", "Forme juridique", "enum", 0, enum=["SA", "SARL", "SUARL", "SNC", "SCS", "SCA"], model="RNEExtract.legal_form"),
+    _field("rne", "capital", "Capital social", "number", 0, model="RNEExtract.capital"),
+    _field("rne", "registered_address", "Adresse du siège", "text", 0, model="RNEExtract.registered_address"),
+    _field("rne", "main_activity", "Activité principale", "text", 0, model="RNEExtract.main_activity"),
+    _field("rne", "activity_code", "Code activité", "text", 0, model="RNEExtract.activity_code"),
+    _field("rne", "company_status", "Statut de la société", "text", 0, model="RNEExtract.company_status"),
+    _field("rne", "registration_date", "Date d'immatriculation", "date", 0, model="RNEExtract.registration_date"),
+    _field("rne", "activity_start_date", "Date de début d'activité", "date", 0, model="RNEExtract.activity_start_date"),
+    _field("rne", "branches_count", "Nombre de succursales", "number", 0, model="RNEExtract.branches_count"),
+    # --- Facture ---
+    _field("invoice", "invoice_number", "Numéro de facture", "text", 1, model="InvoiceExtract.invoice_number"),
+    _field("invoice", "invoice_date", "Date de facture", "date", 1, model="InvoiceExtract.invoice_date"),
+    _field("invoice", "ttn_reference", "Référence TTN", "text", 0, model="InvoiceExtract.ttn_reference"),
+    _field("invoice", "vendor", "Fournisseur / vendeur", "text", 0, model="InvoiceExtract.vendor"),
+    _field("invoice", "vendor_tax_id", "Matricule fiscal fournisseur", "text", 0, regex=r"^\d{7}[A-Za-z/].*$", model="InvoiceExtract.vendor_tax_id"),
+    _field("invoice", "client", "Client", "text", 0, model="InvoiceExtract.client"),
+    _field("invoice", "client_tax_id", "Matricule fiscal client", "text", 0, model="InvoiceExtract.client_tax_id"),
+    _field("invoice", "amount_ht", "Montant HT", "number", 1, model="InvoiceExtract.amount_ht"),
+    _field("invoice", "vat_rate", "Taux de TVA", "number", 0, enum=[0, 6, 7, 12, 13, 18, 19], model="InvoiceExtract.vat_rate"),
+    _field("invoice", "vat_amount", "Montant TVA", "number", 0, model="InvoiceExtract.vat_amount"),
+    _field("invoice", "amount_ttc", "Montant TTC", "number", 0, model="InvoiceExtract.amount_ttc"),
+    _field("invoice", "stamp_duty", "Droit de timbre", "number", 0, model="InvoiceExtract.stamp_duty"),
+    _field("invoice", "net_to_pay", "Net à payer", "number", 0, model="InvoiceExtract.net_to_pay"),
+    _field("invoice", "currency", "Devise", "text", 0, enum=["TND"], model="InvoiceExtract.currency"),
+    _field("invoice", "direction", "Sens (vente/achat)", "enum", 0, enum=["vente", "achat"], model="InvoiceExtract.direction"),
+    # --- Fiche de paie ---
+    _field("payslip", "employee_name", "Nom du salarié", "text", 1, model="payslip.employee_name"),
+    _field("payslip", "employee_id", "Matricule/CIN du salarié", "text", 0),
+    _field("payslip", "period", "Période (mois/année)", "text", 0),
+    _field("payslip", "gross_salary", "Salaire brut", "number", 1, model="payslip.gross_salary"),
+    _field("payslip", "net_salary", "Salaire net à payer", "number", 1, model="payslip.net_salary"),
+    _field("payslip", "cnss_employee", "CNSS part salariale", "number", 0),
+    _field("payslip", "cnss_employer", "CNSS part patronale", "number", 0),
+    _field("payslip", "irpp_withheld", "IRPP retenu à la source", "number", 0),
+    _field("payslip", "css", "Contribution sociale de solidarité (CSS)", "number", 0),
+    _field("payslip", "employer_name", "Employeur", "text", 0),
+    _field("payslip", "employer_tax_id", "Matricule fiscal employeur", "text", 0, regex=r"^\d{7}[A-Za-z/].*$"),
+    # --- Profil consolidé ---
+    _field("profile", "name", "Raison sociale / Nom", "text", 1, model="TaxpayerProfile.name"),
+    _field("profile", "tax_id", "Matricule fiscal", "text", 1, regex=r"^\d{7}[A-Za-z/].*$", model="TaxpayerProfile.tax_id"),
+    _field("profile", "address", "Adresse", "text", 0, model="TaxpayerProfile.address"),
+    _field("profile", "activity", "Activité", "text", 0, model="TaxpayerProfile.activity"),
+    _field("profile", "vat_code", "Code TVA", "text", 0, model="TaxpayerProfile.vat_code"),
+    _field("profile", "category_code", "Code catégorie", "text", 0, model="TaxpayerProfile.category_code"),
+    _field("profile", "secondary_establishment", "Établissement secondaire", "text", 0, model="TaxpayerProfile.secondary_establishment"),
+    _field("profile", "person_type", "Type de personne", "enum", 0, enum=["physique", "societe"], model="TaxpayerProfile.person_type"),
+    _field("profile", "regime", "Régime fiscal", "enum", 0, enum=["reel", "forfaitaire", "autre"], model="TaxpayerProfile.regime"),
+    _field("profile", "sector", "Secteur", "enum", 0, enum=["agriculture", "hotellerie", "commerce", "industrie", "services", "profession_liberale", "association", "autre"], model="TaxpayerProfile.sector"),
+    _field("profile", "legal_form", "Forme juridique", "enum", 0, enum=["SA", "SARL", "SUARL", "SNC", "SCS", "SCA"], model="TaxpayerProfile.legal_form"),
+    _field("profile", "capital", "Capital", "number", 0, model="TaxpayerProfile.capital"),
+    _field("profile", "vat_status", "Statut TVA", "text", 0, model="TaxpayerProfile.vat_status"),
+    _field("profile", "has_employees", "A du personnel", "boolean", 0, model="TaxpayerProfile.has_employees"),
+    _field("profile", "does_withholding", "Effectue des retenues à la source", "boolean", 0, model="TaxpayerProfile.does_withholding"),
+    _field("profile", "subject_to_vat", "Assujetti à la TVA", "boolean", 0, model="TaxpayerProfile.subject_to_vat"),
+    _field("profile", "subject_tfp", "Soumis à la TFP", "boolean", 0, model="TaxpayerProfile.subject_tfp"),
+    _field("profile", "subject_foprolos", "Soumis au FOPROLOS", "boolean", 0, model="TaxpayerProfile.subject_foprolos"),
+    _field("profile", "subject_etablissement", "Soumis au TCL", "boolean", 0, model="TaxpayerProfile.subject_etablissement"),
+    _field("profile", "subject_hotel_tax", "Soumis à la taxe hôtelière", "boolean", 0, model="TaxpayerProfile.subject_hotel_tax"),
+    _field("profile", "subject_licence", "Soumis à la licence boissons", "boolean", 0, model="TaxpayerProfile.subject_licence"),
+    # --- Montants du formulaire ---
+    _field("amounts", "ca_ht", "Chiffre d'affaires HT", "number", 0, model="FormAmounts.ca_ht"),
+    _field("amounts", "ca_ht_19", "CA HT à 19 %", "number", 0, model="FormAmounts.ca_ht_19"),
+    _field("amounts", "ca_ht_13", "CA HT à 13 %", "number", 0, model="FormAmounts.ca_ht_13"),
+    _field("amounts", "ca_ht_7", "CA HT à 7 %", "number", 0, model="FormAmounts.ca_ht_7"),
+    _field("amounts", "tva_collectee", "TVA collectée", "number", 0, model="FormAmounts.tva_collectee"),
+    _field("amounts", "tva_collectee_19", "TVA collectée à 19 %", "number", 0, model="FormAmounts.tva_collectee_19"),
+    _field("amounts", "tva_deductible", "TVA déductible", "number", 0, model="FormAmounts.tva_deductible"),
+    _field("amounts", "tva_nette", "TVA nette due", "number", 0, model="FormAmounts.tva_nette"),
+    _field("amounts", "retenues_total", "Total retenues à la source", "number", 0, model="FormAmounts.retenues_total"),
+    _field("amounts", "stamp_duty_total", "Total droit de timbre", "number", 0, model="FormAmounts.stamp_duty_total"),
+    _field("amounts", "hotel_tax_base", "Base taxe hôtelière", "number", 0, model="FormAmounts.hotel_tax_base"),
+    _field("amounts", "hotel_tax_amount", "Taxe hôtelière", "number", 0, model="FormAmounts.hotel_tax_amount"),
+    _field("amounts", "etablissement_tax_base", "Base TCL", "number", 0, model="FormAmounts.etablissement_tax_base"),
+    _field("amounts", "etablissement_tax_amount", "TCL", "number", 0, model="FormAmounts.etablissement_tax_amount"),
+    # --- Formulaire ---
+    _field("form", "year", "Année", "number", 1, model="MonthContext.year"),
+    _field("form", "month", "Mois", "number", 1, model="MonthContext.month"),
+    _field("form", "declaration_code", "Code déclaration", "enum", 0, enum=["0", "1", "2", "3", "4"], model="MonthContext.declaration_code", desc="0 automatique, 1 taswiya, 2 correction, 3 emploi obligatoire, 4 arrêt d'activité."),
+    _field("form", "activity_stop_date", "Date d'arrêt d'activité", "date", 0, model="MonthContext.activity_stop_date"),
+]
+
+# --- Alias (libellés variantes lus sur les documents) ---
+ALIASES: list[tuple[str, str, str]] = [
+    ("cif", "tax_id", "matricule fiscal"), ("cif", "tax_id", "matricule"), ("cif", "tax_id", "n° fiscal"),
+    ("cif", "tax_id", "identifiant fiscal"), ("cif", "tax_id", "mf"), ("cif", "tax_id", "رقم الجباية"),
+    ("cif", "vat_code", "code tva"), ("cif", "vat_code", "code t.v.a"), ("cif", "vat_code", "tva code"),
+    ("cif", "category_code", "code catégorie"), ("cif", "category_code", "catégorie"),
+    ("cif", "secondary_establishment", "établissement secondaire"), ("cif", "secondary_establishment", "etab secondaire"),
+    ("cif", "name", "raison sociale"), ("cif", "name", "nom"), ("cif", "name", "dénomination"),
+    ("cif", "main_activity", "activité principale"), ("cif", "main_activity", "activité"),
+    ("cif", "vat_status", "statut tva"), ("cif", "vat_status", "régime tva"), ("cif", "vat_status", "assujetti"),
+    ("cif", "subject_to_vat", "assujetti à la tva"), ("cif", "subject_to_vat", "assujetti a la tva"), ("cif", "subject_to_vat", "assujetti tva"),
+    ("cif", "address", "adresse"), ("cif", "address", "العنوان"),
+    ("rne", "rne_identifier", "identifiant rne"), ("rne", "rne_identifier", "id rne"), ("rne", "rne_identifier", "rne"),
+    ("rne", "company_name", "dénomination sociale"), ("rne", "company_name", "raison sociale"),
+    ("rne", "commercial_name", "nom commercial"), ("rne", "legal_form", "forme juridique"), ("rne", "legal_form", "forme"),
+    ("rne", "capital", "capital social"), ("rne", "capital", "capital"),
+    ("rne", "registered_address", "adresse"), ("rne", "registered_address", "siège social"),
+    ("rne", "activity_code", "code activité"), ("rne", "activity_code", "code ape"),
+    ("rne", "registration_date", "date d'immatriculation"), ("rne", "registration_date", "date immatriculation"),
+    ("invoice", "invoice_number", "n° facture"), ("invoice", "invoice_number", "numéro facture"),
+    ("invoice", "invoice_date", "date facture"), ("invoice", "amount_ht", "montant ht"),
+    ("invoice", "amount_ht", "total ht"), ("invoice", "amount_ht", "base ht"),
+    ("invoice", "vat_amount", "montant tva"), ("invoice", "vat_amount", "tva"), ("invoice", "vat_amount", "montant t.v.a"),
+    ("invoice", "amount_ttc", "montant ttc"), ("invoice", "amount_ttc", "total ttc"),
+    ("invoice", "stamp_duty", "timbre"), ("invoice", "stamp_duty", "droit de timbre"),
+    ("invoice", "vendor_tax_id", "matricule fournisseur"), ("invoice", "vendor_tax_id", "mf fournisseur"),
+    ("invoice", "vat_rate", "taux de tva"), ("invoice", "vat_rate", "taux tva"), ("invoice", "vat_rate", "taux"),
+    ("invoice", "invoice_date", "date de facture"), ("invoice", "invoice_number", "numero de facture"),
+    ("payslip", "gross_salary", "salaire brut"), ("payslip", "gross_salary", "brut"),
+    ("payslip", "net_salary", "salaire net"), ("payslip", "net_salary", "net à payer"),
+    ("payslip", "cnss_employee", "cnss salarié"), ("payslip", "cnss_employee", "part salariale"),
+    ("payslip", "irpp_withheld", "irpp"), ("payslip", "irpp_withheld", "retenue irpp"),
+    ("payslip", "css", "css"), ("payslip", "css", "contribution solidarité"),
+    ("payslip", "employee_name", "nom du salarié"), ("payslip", "employee_name", "salarié"),
+]

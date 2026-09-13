@@ -18,9 +18,15 @@ class Settings(BaseSettings):
     groq_model: str = "openai/gpt-oss-120b"
     groq_vision_model: str = "openai/gpt-oss-120b"
 
+    # Accès à la vue administration DGI (/admin) — séparé du contribuable.
+    admin_password: str = "dgi-admin"
+
     # voix de l'assistant : "edge" (neural, en ligne) ou "piper" (hors ligne)
     tts_engine: str = "edge"
-    tts_voice: str = "fr-FR-RemyMultilingualNeural"
+    # Voix française native (éviter les voix "Multilingual" qui déforment la prononciation).
+    tts_voice: str = "fr-FR-HenriNeural"
+    # Voix arabe (arabe standard clair / فصحى) utilisée quand l'interface est en arabe.
+    tts_voice_ar: str = "ar-SA-HamedNeural"
     tts_piper_voice: str = "fr_FR-tom-medium"
 
 

@@ -81,10 +81,21 @@ def init_db() -> None:
                 employee_name TEXT NOT NULL,
                 contract_path TEXT,
                 cnss_path TEXT,
+                payslip_path TEXT,
                 created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS taxpayer_profiles (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                profile_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             );
             """
         )
+        # Migration : ajoute la colonne fiche de paie aux bases existantes.
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(employee_docs)")}
+        if "payslip_path" not in cols:
+            conn.execute("ALTER TABLE employee_docs ADD COLUMN payslip_path TEXT")
 
 
 def create_user(email: str, password: str, phone: str) -> dict[str, Any]:
@@ -215,14 +226,15 @@ def add_employee_doc(
     employee_name: str,
     contract_path: str | None,
     cnss_path: str | None,
+    payslip_path: str | None = None,
 ) -> dict[str, Any]:
     with connect() as conn:
         cur = conn.execute(
             """
-            INSERT INTO employee_docs (user_id, employee_name, contract_path, cnss_path, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO employee_docs (user_id, employee_name, contract_path, cnss_path, payslip_path, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (user_id, employee_name.strip(), contract_path, cnss_path, _utcnow()),
+            (user_id, employee_name.strip(), contract_path, cnss_path, payslip_path, _utcnow()),
         )
         doc_id = int(cur.lastrowid)
     return {
@@ -230,6 +242,7 @@ def add_employee_doc(
         "employee_name": employee_name.strip(),
         "contract_path": contract_path,
         "cnss_path": cnss_path,
+        "payslip_path": payslip_path,
     }
 
 
@@ -237,7 +250,7 @@ def list_employee_docs(user_id: int) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT id, employee_name, contract_path, cnss_path, created_at
+            SELECT id, employee_name, contract_path, cnss_path, payslip_path, created_at
             FROM employee_docs WHERE user_id = ? ORDER BY id DESC
             """,
             (user_id,),
@@ -248,7 +261,57 @@ def list_employee_docs(user_id: int) -> list[dict[str, Any]]:
             "employee_name": r["employee_name"],
             "has_contract": bool(r["contract_path"]),
             "has_cnss": bool(r["cnss_path"]),
+            "has_payslip": bool(r["payslip_path"]),
             "created_at": r["created_at"],
         }
         for r in rows
     ]
+
+
+def list_employee_payslips(user_id: int) -> list[dict[str, str]]:
+    """Retourne les fiches de paie stockées (nom salarié + chemin du fichier)."""
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT employee_name, payslip_path
+            FROM employee_docs
+            WHERE user_id = ? AND payslip_path IS NOT NULL AND payslip_path != ''
+            ORDER BY id DESC
+            """,
+            (user_id,),
+        ).fetchall()
+    return [
+        {"employee_name": r["employee_name"], "path": r["payslip_path"]}
+        for r in rows
+    ]
+
+
+def save_taxpayer_profile(user_id: int, profile: dict[str, Any]) -> dict[str, Any]:
+    """Persiste le profil entreprise (prérempli depuis CIF/RNE, éditable)."""
+    cleaned = {k: ("" if v is None else v) for k, v in profile.items()}
+    payload = json.dumps(cleaned, ensure_ascii=False)
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO taxpayer_profiles (user_id, profile_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                profile_json = excluded.profile_json,
+                updated_at = excluded.updated_at
+            """,
+            (user_id, payload, _utcnow()),
+        )
+    return get_taxpayer_profile(user_id) or cleaned
+
+
+def get_taxpayer_profile(user_id: int) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT profile_json, updated_at FROM taxpayer_profiles WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return None
+    data = json.loads(row["profile_json"] or "{}")
+    data["updated_at"] = row["updated_at"]
+    return data

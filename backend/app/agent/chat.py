@@ -11,6 +11,7 @@ from app.agent.guidance import guidance_for, suggestions_for
 from app.agent.prompts import build_messages
 from app.agent.voice import classify_tone
 from app.config import settings
+from app.knowledge import search as kb_search
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -23,6 +24,7 @@ class AgentContext(BaseModel):
     cif: dict[str, Any] | None = None
     rne: dict[str, Any] | None = None
     onboarding: dict[str, Any] | None = None
+    employees: list[dict[str, Any]] | None = None
     invoices: list[dict[str, Any]] | None = None
     amounts: dict[str, Any] | None = None
     needs_user_review: list[str] | None = None
@@ -38,11 +40,13 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(default_factory=list)
     context: AgentContext = Field(default_factory=AgentContext)
+    lang: str = "fr"
 
 
 class GuidanceRequest(BaseModel):
     step: int | None = None
     context: AgentContext = Field(default_factory=AgentContext)
+    lang: str = "fr"
 
 
 class AgentReply(BaseModel):
@@ -66,7 +70,7 @@ def _context_dict(ctx: AgentContext, step: int | None) -> dict[str, Any]:
 def agent_guidance(body: GuidanceRequest) -> AgentReply:
     """Message proactif pour l'écran courant (pas d'appel IA : réponse instantanée)."""
     context = _context_dict(body.context, body.step)
-    guide = guidance_for(body.step, context)
+    guide = guidance_for(body.step, context, body.lang)
     return AgentReply(
         reply=guide["message"],
         suggestions=guide["suggestions"],
@@ -81,7 +85,7 @@ def agent_guidance(body: GuidanceRequest) -> AgentReply:
 def agent_chat(body: ChatRequest) -> AgentReply:
     """Réponse conversationnelle basée sur le contexte de l'étape."""
     context = _context_dict(body.context, body.context.step)
-    guide = guidance_for(body.context.step, context)
+    guide = guidance_for(body.context.step, context, body.lang)
 
     history = [m.model_dump() for m in body.messages]
     last_user = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
@@ -99,8 +103,10 @@ def agent_chat(body: ChatRequest) -> AgentReply:
     try:
         from groq import Groq
 
+        # RAG : passages du guide officiel pertinents pour la question posée.
+        sources = kb_search.search_chunks(last_user, 4) if last_user else []
         client = Groq(api_key=settings.groq_api_key)
-        messages = build_messages(history, context, guide["message"])
+        messages = build_messages(history, context, guide["message"], sources, lang=body.lang)
         completion = client.chat.completions.create(
             model=settings.groq_model,
             temperature=0.4,
@@ -128,5 +134,5 @@ def agent_chat(body: ChatRequest) -> AgentReply:
 
 
 @router.get("/suggestions")
-def agent_suggestions(step: int | None = None) -> dict[str, list[str]]:
-    return {"suggestions": suggestions_for(step, {})}
+def agent_suggestions(step: int | None = None, lang: str = "fr") -> dict[str, list[str]]:
+    return {"suggestions": suggestions_for(step, {}, lang)}

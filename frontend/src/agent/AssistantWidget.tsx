@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import Avatar3D from './Avatar3D'
 import { useAssistant } from './useAssistant'
 import { useSpeech } from './useSpeech'
+import { useI18n } from '../i18n'
 import type { AgentContext } from './types'
 import './agent.css'
 
@@ -23,29 +24,39 @@ export default function AssistantWidget({
   const [open, setOpen] = useState(
     () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('agent') === 'open',
   )
+  const { t, tr, lang } = useI18n()
   const [input, setInput] = useState('')
-  const [unread, setUnread] = useState(0)
   const [highlight, setHighlight] = useState<string | null>(null)
   const [caption, setCaption] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  const { speak, stop, speaking, level, levelRef, muted, setMuted, needsGesture } = useSpeech()
+  const { speak, stop, speaking, level, levelRef, muted, setMuted, needsGesture } = useSpeech(
+    '/api/agent/tts',
+    lang,
+  )
 
   const { messages, busy, send, reset } = useAssistant({
     step,
     qIndex,
     context,
     enabled,
+    lang,
     onSpeak: (text, tone) => {
+      // Karim reprend la parole à chaque étape, mais speak() coupe d'abord
+      // la voix précédente : jamais deux voix en même temps.
       setCaption(text)
-      void speak(text, tone)
+      void speak(lang === 'ar' ? tr(text) : text, tone)
     },
     onReply: (reply) => {
       setHighlight(reply.highlight ?? null)
       if (reply.highlight) onHighlight?.(reply.highlight)
-      if (!open) setUnread((n) => n + 1)
     },
   })
+
+  // Changement de page / d'étape : on coupe immédiatement la voix en cours.
+  useEffect(() => {
+    stop()
+  }, [step, qIndex, stop])
 
   useEffect(() => {
     if (needsGesture || speaking || !caption) return
@@ -60,7 +71,6 @@ export default function AssistantWidget({
 
   useEffect(() => {
     if (open) {
-      setUnread(0)
       listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
     }
   }, [messages, open])
@@ -71,8 +81,6 @@ export default function AssistantWidget({
     setInput('')
     await send(text)
   }
-
-  const latest = [...messages].reverse().find((m) => m.role === 'assistant')
 
   function toggleOpen() {
     setOpen((was) => {
@@ -86,13 +94,6 @@ export default function AssistantWidget({
 
   return (
     <>
-      {!open && latest && unread > 0 && (
-        <button type="button" className="ag-nudge" onClick={toggleOpen}>
-          <span className="ag-nudge-name">Karim</span>
-          <span className="ag-nudge-text">{latest.text}</span>
-        </button>
-      )}
-
       {open && (
         <section className="ag-panel" aria-label="Assistant Tasrih">
           <header className="ag-head">
@@ -100,14 +101,16 @@ export default function AssistantWidget({
               <span className={`ag-dot ${speaking ? 'on' : ''}`} />
               <div>
                 <strong>Karim</strong>
-                <small>{speaking ? 'parle…' : busy ? 'réfléchit…' : 'assistant Tasrih'}</small>
+                <small>
+                  {speaking ? t('parle…') : busy ? t('réfléchit…') : t('assistant Tasrih')}
+                </small>
               </div>
             </div>
             <div className="ag-head-right">
               <button
                 type="button"
                 className="ag-icon"
-                title={muted ? 'Réactiver la voix' : 'Couper la voix'}
+                title={muted ? t('Réactiver la voix') : t('Couper la voix')}
                 onClick={() => {
                   if (!muted) stop()
                   setMuted(!muted)
@@ -118,12 +121,17 @@ export default function AssistantWidget({
               <button
                 type="button"
                 className="ag-icon"
-                title="Effacer la conversation"
+                title={t('Effacer la conversation')}
                 onClick={reset}
               >
                 ↺
               </button>
-              <button type="button" className="ag-icon" title="Fermer" onClick={toggleOpen}>
+              <button
+                type="button"
+                className="ag-icon"
+                title={t('Fermer')}
+                onClick={toggleOpen}
+              >
                 ✕
               </button>
             </div>
@@ -131,7 +139,7 @@ export default function AssistantWidget({
 
           <div className="ag-stage" data-highlight={highlight ?? undefined}>
             <span className="ag-stage-glow" />
-            <Avatar3D levelRef={levelRef} speaking={speaking} variant="bust" />
+            <Avatar3D levelRef={levelRef} speaking={speaking} variant="half" />
             {caption && <div className="ag-subtitle">{caption}</div>}
           </div>
 
@@ -141,7 +149,7 @@ export default function AssistantWidget({
                 {m.text}
               </div>
             ))}
-            {busy && <div className="ag-typing">Karim écrit…</div>}
+            {busy && <div className="ag-typing">{t('Karim écrit…')}</div>}
           </div>
 
           {suggestions.length > 0 && (
@@ -158,8 +166,8 @@ export default function AssistantWidget({
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Posez votre question…"
-              aria-label="Votre message"
+              placeholder={t('Posez votre question…')}
+              aria-label={t('Posez votre question…')}
             />
             <button type="submit" className="ag-send" disabled={busy || !input.trim()}>
               ➤
@@ -168,13 +176,9 @@ export default function AssistantWidget({
         </section>
       )}
 
-      {!open && caption && (
-        <div className="ag-caption-bubble">{caption}</div>
-      )}
-
       {needsGesture && !muted && (
         <span className="ag-voice-hint" role="status">
-          🔊 Activez la voix
+          🔊 {t('Activez la voix')}
         </span>
       )}
 
@@ -182,7 +186,7 @@ export default function AssistantWidget({
         type="button"
         className={`ag-launcher ${speaking ? 'talking' : ''}`}
         onClick={toggleOpen}
-        aria-label={open ? "Fermer l'assistant" : "Ouvrir l'assistant"}
+        aria-label={open ? t("Fermer l'assistant") : t('Ouvrir l’assistant')}
       >
         <span className="ag-launcher-ring" style={{ transform: `scale(${1 + level * 0.25})` }} />
         {open ? (
@@ -192,7 +196,6 @@ export default function AssistantWidget({
             <Avatar3D levelRef={levelRef} speaking={speaking} variant="head" />
           </span>
         )}
-        {unread > 0 && !open && <span className="ag-badge">{unread}</span>}
       </button>
     </>
   )

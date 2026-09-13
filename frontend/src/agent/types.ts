@@ -15,6 +15,7 @@ export type AgentContext = {
   cif?: Record<string, unknown> | null
   rne?: Record<string, unknown> | null
   onboarding?: Record<string, unknown> | null
+  employees?: Record<string, unknown>[] | null
   invoices?: Record<string, unknown>[] | null
   amounts?: Record<string, unknown> | null
   needs_user_review?: string[] | null

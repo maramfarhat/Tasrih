@@ -32,10 +32,11 @@ _piper_voice = None
 class TTSBody(BaseModel):
     text: str
     tone: str = "neutral"
+    lang: str = "fr"
 
 
 # —— moteur Edge (neural, en ligne) ——
-async def _synth_edge(text: str, tone: str) -> tuple[bytes, str]:
+async def _synth_edge(text: str, tone: str, voice: str) -> tuple[bytes, str]:
     try:
         import edge_tts  # type: ignore
     except Exception as exc:  # pragma: no cover
@@ -44,7 +45,7 @@ async def _synth_edge(text: str, tone: str) -> tuple[bytes, str]:
     prosody = prosody_for(tone)
     communicate = edge_tts.Communicate(
         enhance_for_speech(text),
-        settings.tts_voice,
+        voice,
         rate=prosody["rate"],
         pitch=prosody["pitch"],
         volume=prosody["volume"],
@@ -88,6 +89,7 @@ def tts_status() -> dict:
     return {
         "engine": settings.tts_engine,
         "voice": settings.tts_voice,
+        "voice_ar": settings.tts_voice_ar,
         "piper_voice": settings.tts_piper_voice,
         "piper_available": (TTS_DIR / f"{settings.tts_piper_voice}.onnx").exists(),
     }
@@ -103,11 +105,12 @@ async def tts(body: TTSBody) -> Response:
 
     data: bytes | None = None
     mime = "audio/mpeg"
+    voice = settings.tts_voice_ar if body.lang == "ar" else settings.tts_voice
 
     # 1) Edge (neural) si demandé
     if settings.tts_engine != "piper":
         try:
-            data, mime = await _synth_edge(text, tone)
+            data, mime = await _synth_edge(text, tone, voice)
         except Exception:
             data = None
 

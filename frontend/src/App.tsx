@@ -1,11 +1,40 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import AssistantWidget from './agent/AssistantWidget'
 import type { AgentContext } from './agent/types'
+import { LangToggle, useI18n } from './i18n'
 
 const API = import.meta.env.VITE_API_URL || '/api'
 const TOKEN_KEY = 'tasrih_token'
 
 type User = { id: number; email: string; phone: string }
+
+type ProfileDraft = {
+  name: string
+  tax_id: string
+  address: string
+  activity: string
+  vat_code: string
+  category_code: string
+  secondary_establishment: string
+  vat_status: string
+  rne_identifier: string
+  commercial_name: string
+  legal_form: string
+}
+
+const EMPTY_PROFILE: ProfileDraft = {
+  name: '',
+  tax_id: '',
+  address: '',
+  activity: '',
+  vat_code: '',
+  category_code: '',
+  secondary_establishment: '000',
+  vat_status: '',
+  rne_identifier: '',
+  commercial_name: '',
+  legal_form: '',
+}
 
 type CIF = {
   tax_id?: string | null
@@ -31,6 +60,8 @@ type RNE = {
   registered_address?: string | null
   main_activity?: string | null
   company_status?: string | null
+  registration_date?: string | null
+  activity_start_date?: string | null
   confidence: number
   warnings: string[]
 }
@@ -51,6 +82,77 @@ type Invoice = {
   warnings: string[]
 }
 
+type Retenue = {
+  certificate_number?: string | null
+  beneficiary?: string | null
+  beneficiary_tax_id?: string | null
+  nature?: string | null
+  base: number
+  rate?: number | null
+  amount: number
+  source: string
+  confidence: number
+  warnings: string[]
+}
+
+type RetenueOperation = {
+  id_type_operation?: string | null
+  nature?: string | null
+  annee_facturation?: string | null
+  montant_ht: number
+  taux_rs?: number | null
+  taux_tva?: number | null
+  montant_tva: number
+  montant_ttc: number
+  montant_rs: number
+  montant_net_servi: number
+}
+
+type RetenueCertificate = {
+  reference?: string | null
+  date_paiement?: string | null
+  resident?: boolean
+  beneficiary_name?: string | null
+  beneficiary_id?: string | null
+  beneficiary_id_type?: string | null
+  beneficiary_category?: string | null
+  beneficiary_address?: string | null
+  beneficiary_activity?: string | null
+  operations: RetenueOperation[]
+  total_ht: number
+  total_tva: number
+  total_ttc: number
+  total_rs: number
+  total_net_servi: number
+}
+
+type RetenueDeclaration = {
+  declarant_id?: string | null
+  declarant_category?: string | null
+  declarant_name?: string | null
+  acte_depot?: string | null
+  year?: number | null
+  month?: number | null
+  certificates: RetenueCertificate[]
+  total_ht: number
+  total_tva: number
+  total_ttc: number
+  total_rs: number
+  total_net_servi: number
+  filename?: string
+}
+
+type Payslip = {
+  filename: string
+  employee_name?: string | null
+  period?: string | null
+  salaire_brut?: number | null
+  cotisations?: number | null
+  salaire_net?: number | null
+  confidence: number
+  warnings: string[]
+}
+
 type Gap = {
   id: string
   field: string
@@ -64,6 +166,7 @@ type EmployeeDoc = {
   employee_name: string
   has_contract: boolean
   has_cnss: boolean
+  has_payslip: boolean
 }
 
 type Filled = {
@@ -89,19 +192,46 @@ type Filled = {
     ca_ht_7: number
     tva_collectee: number
     tva_collectee_19: number
+    retenues_total: number
+    retenue_base_total: number
+    masse_salariale_brute: number
+    tfp_base: number
+    tfp_rate: number
+    tfp_amount: number
+    foprolos_base: number
+    foprolos_rate: number
+    foprolos_amount: number
     tva_deductible: number
     tva_nette: number
+    tva_credit_report: number
+    tva_credit_next: number
+    stamp_duty_count: number
     stamp_duty_total: number
     etablissement_tax_base: number
     etablissement_tax_amount: number
     hotel_tax_base: number
+    hotel_tax_rate: number
     hotel_tax_amount: number
   }
+  retenues: Retenue[]
+  payslips: Payslip[]
   checkboxes: Record<string, boolean>
   gap_questions: Gap[]
   confidence: number
   needs_user_review: string[]
   checklist: string[]
+  domain?: string
+  tax_applicability?: Record<string, boolean>
+  tax_lines?: {
+    key: string
+    label_fr: string
+    label_ar: string
+    amount_field?: string | null
+    applicable: boolean
+    mark: string
+    reason: string
+  }[]
+  sans_objet?: string[]
 }
 
 type Onboarding = {
@@ -130,18 +260,95 @@ const DECLARATION_CHANNELS = [
   { value: 'autre', label: 'Autre' },
 ]
 
+/** Champs matériels : toute correction au-delà de la tolérance exige un motif (DGI). */
+const MATERIAL_AMOUNT_FIELDS = [
+  { key: 'ca_ht', label: 'Chiffre d’affaires' },
+  { key: 'tva_collectee', label: 'TVA collectée' },
+  { key: 'tva_deductible', label: 'TVA déductible' },
+  { key: 'retenues_total', label: 'Retenue à la source' },
+] as const
+const OVERRIDE_TOLERANCE_PCT = 5
+
 /** After login: questions → (employees) → scan → profil → factures → formulaire */
-const STEPS = ['Questions', 'Docs', 'Scan', 'Profil', 'Factures', 'Formulaire'] as const
+const STEPS = [
+  'Documents',
+  'Questions',
+  'Personnel',
+  'Profil',
+  'Factures',
+  'Retenue TEJ',
+  'Formulaire',
+] as const
 
 function authHeaders(token: string | null): HeadersInit {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+function AmountRow({
+  label,
+  field,
+  amounts,
+  edits,
+  onEdit,
+  step = '0.001',
+}: {
+  label: string
+  field: string
+  amounts: Record<string, number>
+  edits: Record<string, number>
+  onEdit: (field: string, raw: string) => void
+  step?: string
+}) {
+  const value = edits[field] ?? amounts[field] ?? 0
+  return (
+    <label className="amount-row">
+      <span>{label}</span>
+      <input
+        type="number"
+        step={step}
+        value={value}
+        onChange={(e) => onEdit(field, e.target.value)}
+      />
+    </label>
+  )
+}
+
+/** Ligne de vérification éditable d'un champ extrait (ou « Non extrait »). */
+function ExtractRow({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: unknown
+  onChange?: (v: string) => void
+}) {
+  const has = value !== null && value !== undefined && String(value).trim() !== ''
+  return (
+    <div className={`extract-row${has ? '' : ' missing'}`}>
+      <span className="extract-label">{label}</span>
+      {onChange ? (
+        <input
+          className="extract-input"
+          value={value === null || value === undefined ? '' : String(value)}
+          placeholder="Non extrait"
+          onChange={(e) => onChange(e.target.value)}
+        />
+      ) : (
+        <span className="extract-value">{has ? String(value) : 'Non extrait'}</span>
+      )}
+    </div>
+  )
+}
+
+
 export default function App() {
+  const { t } = useI18n()
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY))
   const [user, setUser] = useState<User | null>(null)
   const [authMode, setAuthMode] = useState<'login' | 'register'>('register')
   const [authForm, setAuthForm] = useState({ email: '', password: '', phone: '' })
+  const [showAuth, setShowAuth] = useState(false)
   const [booting, setBooting] = useState(Boolean(token))
 
   const [step, setStep] = useState(0)
@@ -157,26 +364,25 @@ export default function App() {
   const [empName, setEmpName] = useState('')
   const [empContract, setEmpContract] = useState<File | null>(null)
   const [empCnss, setEmpCnss] = useState<File | null>(null)
+  const [empPayslip, setEmpPayslip] = useState<File | null>(null)
   const [busyEmp, setBusyEmp] = useState(false)
 
   const [cif, setCif] = useState<CIF | null>(null)
   const [rne, setRne] = useState<RNE | null>(null)
   const [busyCif, setBusyCif] = useState(false)
   const [busyRne, setBusyRne] = useState(false)
-  const [profileDraft, setProfileDraft] = useState({
-    name: '',
-    tax_id: '',
-    address: '',
-    activity: '',
-    vat_code: '',
-    category_code: '',
-    secondary_establishment: '000',
-    vat_status: '',
-    rne_identifier: '',
-    commercial_name: '',
-    legal_form: '',
-  })
+  const [profileDraft, setProfileDraft] = useState<ProfileDraft>({ ...EMPTY_PROFILE })
+  const [showSettings, setShowSettings] = useState(false)
+  const [busyProfile, setBusyProfile] = useState(false)
+  const [profileSaved, setProfileSaved] = useState(false)
   const [invoices, setInvoices] = useState<Invoice[]>([])
+  const [retenues, setRetenues] = useState<Retenue[]>([])
+  const [retenueDecls, setRetenueDecls] = useState<RetenueDeclaration[]>([])
+  const [busyRetenue, setBusyRetenue] = useState(false)
+  const [payslips, setPayslips] = useState<Payslip[]>([])
+  const [amountEdits, setAmountEdits] = useState<Record<string, number>>({})
+  const [fieldComments, setFieldComments] = useState<Record<string, string>>({})
+  const [busyPayroll, setBusyPayroll] = useState(false)
   const [month, setMonth] = useState(new Date().getMonth() + 1)
   const [year, setYear] = useState(new Date().getFullYear())
   const [answers, setAnswers] = useState<Record<string, unknown>>({})
@@ -200,12 +406,41 @@ export default function App() {
 
   const loggedIn = Boolean(token && user)
 
+  const hasAmountEdits = Object.keys(amountEdits).length > 0
+  const amountsOverride = useMemo(() => {
+    if (!filled || !hasAmountEdits) return undefined
+    const base: Record<string, number> = { ...filled.amounts }
+    for (const [key, value] of Object.entries(amountEdits)) {
+      base[key] = value
+    }
+    return base
+  }, [filled, amountEdits, hasAmountEdits])
+
+  /** Corrections de champs matériels au-delà de la tolérance → motif obligatoire. */
+  const materialOverrides = useMemo(() => {
+    if (!filled) return [] as { field: string; label: string; ocr: number; manual: number; delta: number }[]
+    const out: { field: string; label: string; ocr: number; manual: number; delta: number }[] = []
+    for (const { key, label } of MATERIAL_AMOUNT_FIELDS) {
+      const manual = amountEdits[key]
+      if (manual === undefined) continue
+      const ocr = Number((filled.amounts as unknown as Record<string, number>)[key] ?? 0)
+      if (!ocr) continue
+      const delta = ((manual - ocr) / Math.abs(ocr)) * 100
+      if (Math.abs(delta) > OVERRIDE_TOLERANCE_PCT) {
+        out.push({ field: key, label, ocr, manual, delta })
+      }
+    }
+    return out
+  }, [filled, amountEdits])
+
   const payload = useMemo(
     () => ({
       month: { year, month, declaration_code: '0' },
       cif,
       rne,
       invoices,
+      retenues,
+      payslips,
       answers: {
         ...answers,
         name: profileDraft.name,
@@ -222,7 +457,7 @@ export default function App() {
         has_employees: onboarding.has_personnel,
       },
     }),
-    [year, month, cif, rne, invoices, answers, profileDraft, onboarding.has_personnel],
+    [year, month, cif, rne, invoices, retenues, payslips, answers, profileDraft, onboarding.has_personnel],
   )
 
   const agentStep = loggedIn ? step : 0
@@ -234,13 +469,14 @@ export default function App() {
       cif: cif as Record<string, unknown> | null,
       rne: rne as Record<string, unknown> | null,
       onboarding: onboarding as unknown as Record<string, unknown>,
+      employees: employees as unknown as Record<string, unknown>[],
       invoices: invoices as unknown as Record<string, unknown>[],
       amounts: (filled?.amounts as Record<string, unknown>) ?? null,
       needs_user_review: filled?.needs_user_review ?? null,
       confidence: filled?.confidence ?? null,
       logged_in: loggedIn,
     }),
-    [agentStep, qIndex, profileDraft, cif, rne, onboarding, invoices, filled, loggedIn],
+    [agentStep, qIndex, profileDraft, cif, rne, onboarding, employees, invoices, filled, loggedIn],
   )
 
   useEffect(() => {
@@ -254,6 +490,17 @@ export default function App() {
         if (!res.ok) throw new Error('Session expirée')
         const data = await res.json()
         setUser(data.user)
+        if (data.profile && typeof data.profile === 'object') {
+          setProfileDraft({
+            ...EMPTY_PROFILE,
+            ...Object.fromEntries(
+              Object.keys(EMPTY_PROFILE).map((k) => [
+                k,
+                String((data.profile as Record<string, unknown>)[k] ?? EMPTY_PROFILE[k as keyof ProfileDraft]),
+              ]),
+            ),
+          })
+        }
         if (data.onboarding?.previous_is != null) {
           setOnboarding({
             previous_is: data.onboarding.previous_is || '',
@@ -263,9 +510,9 @@ export default function App() {
           })
         }
         setEmployees(data.employees || [])
-        // On atterrit toujours sur l'accueil après connexion / inscription.
         setQIndex(0)
-        setStep(0)
+        // Après connexion : directement les documents fiscaux, puis les questions.
+        setStep(3)
       } catch {
         localStorage.removeItem(TOKEN_KEY)
         setToken(null)
@@ -296,7 +543,9 @@ export default function App() {
       localStorage.setItem(TOKEN_KEY, data.token)
       setToken(data.token)
       setUser(data.user)
-      setStep(0)
+      setShowAuth(false)
+      // Après connexion/inscription on démarre par le dépôt des documents fiscaux.
+      setStep(3)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erreur connexion')
     } finally {
@@ -314,7 +563,9 @@ export default function App() {
     localStorage.removeItem(TOKEN_KEY)
     setToken(null)
     setUser(null)
-    setStep(0)
+    setShowSettings(false)
+    setProfileDraft({ ...EMPTY_PROFILE })
+    setStep(3)
     setQIndex(0)
     setFilled(null)
     setInvoices([])
@@ -377,7 +628,7 @@ export default function App() {
       setBusy(true)
       try {
         await persistOnboarding()
-        setStep(3)
+        setStep(4)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Erreur onboarding')
       } finally {
@@ -407,8 +658,8 @@ export default function App() {
       setError('Nom de l’employé requis')
       return
     }
-    if (!empContract && !empCnss) {
-      setError('Ajoutez le contrat de travail et/ou la fiche CNSS')
+    if (!empContract && !empCnss && !empPayslip) {
+      setError('Ajoutez le contrat de travail, la fiche CNSS et/ou la fiche de paie')
       return
     }
     setBusyEmp(true)
@@ -418,6 +669,7 @@ export default function App() {
       fd.append('employee_name', empName.trim())
       if (empContract) fd.append('contract', empContract)
       if (empCnss) fd.append('cnss', empCnss)
+      if (empPayslip) fd.append('payslip', empPayslip)
       const res = await fetch(`${API}/employees/docs`, {
         method: 'POST',
         headers: authHeaders(token),
@@ -429,6 +681,7 @@ export default function App() {
       setEmpName('')
       setEmpContract(null)
       setEmpCnss(null)
+      setEmpPayslip(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erreur upload employé')
     } finally {
@@ -442,12 +695,23 @@ export default function App() {
     const path =
       kind === 'cif' ? '/extract/cif' : kind === 'rne' ? '/extract/rne' : '/extract/invoice'
     const res = await fetch(`${API}${path}`, { method: 'POST', body: fd })
-    if (!res.ok) throw new Error(await res.text())
+    if (!res.ok) {
+      const raw = await res.text()
+      let message = raw
+      try {
+        const parsed = JSON.parse(raw)
+        if (typeof parsed?.detail === 'string') message = parsed.detail
+        else if (Array.isArray(parsed?.detail)) message = parsed.detail[0]?.msg || raw
+      } catch {
+        /* réponse non JSON — garder le texte brut */
+      }
+      throw new Error(message)
+    }
     return res.json()
   }
 
-  function buildProfileFromDocs(nextCif: CIF | null, nextRne: RNE | null) {
-    setProfileDraft({
+  function buildProfileFromDocs(nextCif: CIF | null, nextRne: RNE | null): ProfileDraft {
+    const next: ProfileDraft = {
       name: nextCif?.name || nextRne?.company_name || '',
       tax_id: nextCif?.tax_id || '',
       address: nextCif?.address || nextRne?.registered_address || '',
@@ -460,7 +724,30 @@ export default function App() {
       commercial_name:
         nextRne?.commercial_name_latin || nextRne?.commercial_name || '',
       legal_form: nextRne?.legal_form || '',
-    })
+    }
+    setProfileDraft(next)
+    return next
+  }
+
+  async function persistProfile(draft: ProfileDraft = profileDraft) {
+    if (!token) return
+    setBusyProfile(true)
+    setProfileSaved(false)
+    setError(null)
+    try {
+      const res = await fetch(`${API}/profile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+        body: JSON.stringify(draft),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      setProfileSaved(true)
+      window.setTimeout(() => setProfileSaved(false), 2500)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Enregistrement profil échoué')
+    } finally {
+      setBusyProfile(false)
+    }
   }
 
   async function onCif(files: FileList | null, input: HTMLInputElement) {
@@ -470,7 +757,11 @@ export default function App() {
     try {
       const data = await uploadExtract('cif', files[0])
       setCif(data)
-      buildProfileFromDocs(data, rne)
+      const next = buildProfileFromDocs(data, rne)
+      if (rne) {
+        void persistProfile(next)
+        setStep(8)
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erreur carte fiscale')
     } finally {
@@ -486,13 +777,26 @@ export default function App() {
     try {
       const data = await uploadExtract('rne', files[0])
       setRne(data)
-      buildProfileFromDocs(cif, data)
+      const next = buildProfileFromDocs(cif, data)
+      if (cif) {
+        void persistProfile(next)
+        setStep(8)
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erreur RNE')
     } finally {
       setBusyRne(false)
       input.value = ''
     }
+  }
+
+  /** Édition manuelle des champs extraits (écran de vérification). */
+  function updateCif(patch: Partial<CIF>) {
+    setCif((c) => (c ? { ...c, ...patch } : c))
+  }
+
+  function updateRne(patch: Partial<RNE>) {
+    setRne((r) => (r ? { ...r, ...patch } : r))
   }
 
   async function onInvoices(files: FileList | null) {
@@ -518,14 +822,126 @@ export default function App() {
     }
   }
 
-  async function runPipeline() {
+  async function onRetenues(files: FileList | null) {
+    if (!files?.length) return
+    setBusyRetenue(true)
+    setError(null)
+    try {
+      const extracted: Retenue[] = []
+      const decls: RetenueDeclaration[] = []
+      for (const file of Array.from(files)) {
+        const fd = new FormData()
+        fd.append('file', file)
+        const res = await fetch(`${API}/extract/retenue`, { method: 'POST', body: fd })
+        if (!res.ok) throw new Error(await res.text())
+        const data = await res.json()
+        extracted.push(...(data.retenues || []))
+        if (data.declaration) decls.push(data.declaration)
+      }
+      setRetenues((prev) => [...prev, ...extracted])
+      if (decls.length) setRetenueDecls((prev) => [...prev, ...decls])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erreur certificats de retenue TEJ')
+    } finally {
+      setBusyRetenue(false)
+    }
+  }
+
+  function mergeRetenueDecls(decls: RetenueDeclaration[]): RetenueDeclaration | null {
+    if (!decls.length) return null
+    const base = decls[0]
+    const merged: RetenueDeclaration = {
+      ...base,
+      certificates: decls.flatMap((d) => d.certificates),
+      total_ht: 0,
+      total_tva: 0,
+      total_ttc: 0,
+      total_rs: 0,
+      total_net_servi: 0,
+    }
+    for (const d of decls) {
+      merged.total_ht += d.total_ht
+      merged.total_tva += d.total_tva
+      merged.total_ttc += d.total_ttc
+      merged.total_rs += d.total_rs
+      merged.total_net_servi += d.total_net_servi
+    }
+    return merged
+  }
+
+  async function exportRetenuePdf() {
+    const declaration = mergeRetenueDecls(retenueDecls)
+    if (!declaration) {
+      setError('Importez au moins un fichier XML TEJ')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
+      const res = await fetch(`${API}/export/retenue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+        body: JSON.stringify({
+          declaration,
+          profile: {
+            name: profileDraft.name,
+            tax_id: profileDraft.tax_id,
+            address: profileDraft.address,
+            vat_code: profileDraft.vat_code,
+            category_code: profileDraft.category_code,
+            secondary_establishment: profileDraft.secondary_establishment,
+          },
+          month: { year, month, declaration_code: '0' },
+        }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      const buf = await res.arrayBuffer()
+      if (!buf.byteLength) throw new Error('PDF vide')
+      const url = URL.createObjectURL(new Blob([buf], { type: 'application/pdf' }))
+      window.open(url, '_blank', 'noopener,noreferrer')
+      window.setTimeout(() => URL.revokeObjectURL(url), 120_000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Export retenue échoué')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function loadPayroll() {
+    setBusyPayroll(true)
+    setError(null)
+    try {
+      const res = await fetch(`${API}/employees/payroll`, { headers: authHeaders(token) })
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
+      setPayslips(data.payslips || [])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erreur calcul de la paie')
+    } finally {
+      setBusyPayroll(false)
+    }
+  }
+
+  function editAmount(field: string, raw: string) {
+    const value = Number(raw)
+    setAmountEdits((prev) => ({ ...prev, [field]: Number.isFinite(value) ? value : 0 }))
+  }
+
+  async function runPipeline(extraAnswers?: Record<string, unknown>) {
+    setBusy(true)
+    setError(null)
+    try {
+      const answersMerged = extraAnswers
+        ? { ...payload.answers, ...extraAnswers }
+        : payload.answers
       const res = await fetch(`${API}/pipeline/build`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+        body: JSON.stringify({
+          ...payload,
+          answers: answersMerged,
+          amounts_override: amountsOverride,
+        }),
       })
       if (!res.ok) throw new Error(await res.text())
       const data: Filled = await res.json()
@@ -538,10 +954,71 @@ export default function App() {
     }
   }
 
+  function answerGap(field: string, value: unknown) {
+    setAnswers((prev) => ({ ...prev, [field]: value }))
+    void runPipeline({ [field]: value })
+  }
+
+  /** Enregistre la déclaration + les corrections (avec motifs) côté DGI. */
+  async function persistDeclaration() {
+    if (!filled || !token) return
+    try {
+      const a = filled.amounts
+      const res = await fetch(`${API}/declarations/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+        body: JSON.stringify({
+          matricule_fiscal: filled.profile.tax_id,
+          name: filled.profile.name,
+          activite: filled.profile.activity,
+          code_tva: filled.profile.vat_code,
+          code_categorie: filled.profile.category_code,
+          regime: 'reel',
+          month,
+          year,
+          chiffre_affaires_declare: a.ca_ht,
+          tva_collectee: a.tva_collectee,
+          tva_deductible: a.tva_deductible,
+          retenue_totale: a.retenues_total,
+          status: 'submitted',
+          invoice_count: invoices.length,
+          invoice_amount_ht: invoices.reduce((s, i) => s + (i.amount_ht || 0), 0),
+          invoice_amount_ttc: invoices.reduce((s, i) => s + (i.amount_ttc || 0), 0),
+          invoice_ids: invoices.map((i) => i.invoice_number || i.filename).filter(Boolean),
+        }),
+      })
+      if (!res.ok) return
+      const saved = await res.json()
+      for (const o of materialOverrides) {
+        await fetch(`${API}/declarations/${saved.declaration_id}/field-edit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+          body: JSON.stringify({
+            field_name: o.field,
+            ocr_extracted_value: o.ocr,
+            manual_value: o.manual,
+            comment: fieldComments[o.field] || '',
+          }),
+        })
+      }
+    } catch {
+      /* l'enregistrement DGI ne bloque pas l'export */
+    }
+  }
+
   async function openOfficialPdf(e: FormEvent) {
     e.preventDefault()
     if (answers.does_withholding === undefined) {
       setError('Répondez à la question sur les retenues à la source')
+      return
+    }
+    // Motif obligatoire pour toute correction matérielle au-delà de la tolérance.
+    const missingComments = materialOverrides.filter((o) => !(fieldComments[o.field] || '').trim())
+    if (missingComments.length) {
+      setError(
+        `Motif obligatoire pour : ${missingComments.map((m) => m.label).join(', ')} ` +
+          `(écart > ${OVERRIDE_TOLERANCE_PCT} % vs valeur extraite).`,
+      )
       return
     }
     setBusy(true)
@@ -549,15 +1026,27 @@ export default function App() {
     try {
       const res = await fetch(`${API}/pipeline/export-official`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+        body: JSON.stringify({ ...payload, amounts_override: amountsOverride }),
       })
       if (!res.ok) throw new Error(await res.text())
       const buf = await res.arrayBuffer()
       if (!buf.byteLength) throw new Error('PDF vide')
-      const url = URL.createObjectURL(new Blob([buf], { type: 'application/pdf' }))
+      const filename =
+        res.headers.get('Content-Disposition')?.match(/filename="?([^"]+)"?/)?.[1] ||
+        `declaration_mensuelle_${year}_${String(month).padStart(2, '0')}.pdf`
+      const blob = new Blob([buf], { type: 'application/pdf' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.rel = 'noopener'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
       window.open(url, '_blank', 'noopener,noreferrer')
       window.setTimeout(() => URL.revokeObjectURL(url), 120_000)
+      void persistDeclaration()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Export échoué')
     } finally {
@@ -565,25 +1054,22 @@ export default function App() {
     }
   }
 
-  const onboardingDone = Boolean(onboarding.declaration_channel)
-  const resumeStep = !onboardingDone ? 1 : invoices.length > 0 ? (filled ? 6 : 5) : 3
-  const homeCta = !onboardingDone
-    ? 'Commencer la déclaration'
-    : filled
-      ? 'Voir la déclaration'
-      : invoices.length > 0
-        ? 'Remplir la déclaration'
-        : 'Reprendre le parcours'
-  const homeHint = !onboardingDone
-    ? 'Quelques questions pour personnaliser votre parcours.'
-    : filled
-      ? 'Votre déclaration mensuelle est prête.'
-      : invoices.length > 0
-        ? 'Vos factures sont importées, calculez la déclaration.'
-        : 'Scannez votre carte fiscale et votre extrait RNE.'
-
   const progressIndex =
-    step === 1 ? 0 : step === 2 ? 1 : step === 3 ? 2 : step === 4 ? 3 : step === 5 ? 4 : step === 6 ? 5 : -1
+    step === 3 || step === 8
+      ? 0
+      : step === 1
+        ? 1
+        : step === 2
+          ? 2
+          : step === 4
+            ? 3
+            : step === 5
+              ? 4
+              : step === 7
+                ? 5
+                : step === 6
+                  ? 6
+                  : -1
 
   if (booting) {
     return (
@@ -599,174 +1085,423 @@ export default function App() {
   return (
     <div className="app">
       <div className="bg" aria-hidden="true" />
-      <div className="shell">
-        {/* —— HOME + AUTH —— */}
+      <div className={loggedIn ? 'shell' : 'shell shell-landing'}>
+        {/* —— PUBLIC LANDING + AUTH —— */}
         {!loggedIn && (
-          <section className="hero home-auth" data-spotlight="auth">
-            <div className="brand-lockup">
-              <img src="/favicon.svg" alt="" className="brand-logo" width={72} height={72} />
-              <h1 className="brand">
-                <span>Déclaration mensuelle Tunisie</span>
-                Tasrih
-              </h1>
-            </div>
-            <p className="lead">
-              Créez votre compte, répondez aux questions, scannez vos documents et générez votre
-              déclaration mensuelle.
-            </p>
-
-            <form className="auth-card" onSubmit={(e) => void submitAuth(e)}>
-              <div className="auth-tabs">
-                <button
-                  type="button"
-                  className={authMode === 'register' ? 'on' : ''}
-                  onClick={() => setAuthMode('register')}
-                >
-                  Créer un compte
-                </button>
-                <button
-                  type="button"
-                  className={authMode === 'login' ? 'on' : ''}
-                  onClick={() => setAuthMode('login')}
-                >
-                  Se connecter
-                </button>
-              </div>
-              <div className="field">
-                <label htmlFor="email">Email</label>
-                <input
-                  id="email"
-                  type="email"
-                  required
-                  autoComplete="email"
-                  value={authForm.email}
-                  onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="password">Mot de passe</label>
-                <input
-                  id="password"
-                  type="password"
-                  required
-                  minLength={6}
-                  autoComplete={authMode === 'register' ? 'new-password' : 'current-password'}
-                  value={authForm.password}
-                  onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
-                />
-              </div>
-              {authMode === 'register' && (
-                <div className="field">
-                  <label htmlFor="phone">Numéro de téléphone</label>
-                  <input
-                    id="phone"
-                    type="tel"
-                    required
-                    autoComplete="tel"
-                    placeholder="+216 …"
-                    value={authForm.phone}
-                    onChange={(e) => setAuthForm({ ...authForm, phone: e.target.value })}
+          <div className="landing">
+            <header className="ft-topbar">
+              <div className="ft-topbar-inner">
+                <div className="ft-brand">
+                  <img
+                    src="/tasrih-logo.png"
+                    alt="Tasrih"
+                    className="ft-logo"
                   />
                 </div>
-              )}
-              {error && <p className="error">{error}</p>}
-              <button type="submit" className="btn btn-primary" disabled={busy}>
-                {busy
-                  ? 'Patientez…'
-                  : authMode === 'register'
-                    ? 'S’inscrire et continuer'
-                    : 'Se connecter'}
-              </button>
-            </form>
-          </section>
+                <div className="ft-actions">
+                  <LangToggle />
+                  <button
+                    type="button"
+                    className="ft-btn ft-btn-solid"
+                    onClick={() => {
+                      setAuthMode('register')
+                      setError(null)
+                      setShowAuth(true)
+                    }}
+                  >
+                    {t("S'inscrire")}
+                  </button>
+                  <button
+                    type="button"
+                    className="ft-btn ft-btn-outline"
+                    onClick={() => {
+                      setAuthMode('login')
+                      setError(null)
+                      setShowAuth(true)
+                    }}
+                  >
+                    {t('Se connecter')}
+                  </button>
+                </div>
+              </div>
+            </header>
+
+            <main className="ft-main">
+              <section className="ef-home-hero">
+                <img
+                  className="ef-home-hero-logo"
+                  src="/tasrih-logo.png"
+                  alt="تصريح — Tasrih"
+                />
+                <h1 className="ef-home-hero-title visually-hidden">Tasrih</h1>
+                <p className="ef-home-hero-subtitle">
+                  {t(
+                    'Plateforme d’aide à la déclaration mensuelle tunisienne : documents fiscaux, factures électroniques Fatoora et formulaire officiel prérempli.',
+                  )}
+                </p>
+              </section>
+
+              <section className="ef-home-steps-section">
+                <h2 className="ef-home-steps-title">{t('Votre déclaration en 5 étapes')}</h2>
+                <p className="ef-home-steps-subtitle">{t('Un parcours simple et guidé')}</p>
+                <div className="ef-home-steps-grid">
+                  <div className="ef-home-step-card">
+                    <div className="ef-home-step-number">1</div>
+                    <div className="ef-home-step-icon" aria-hidden="true">
+                      🧾
+                    </div>
+                    <h3 className="ef-home-step-card-title">{t('Documents fiscaux')}</h3>
+                    <p className="ef-home-step-card-desc">
+                      {t('Carte d’identification fiscale et extrait RNE lus automatiquement (OCR).')}
+                    </p>
+                  </div>
+                  <div className="ef-home-step-card">
+                    <div className="ef-home-step-number">2</div>
+                    <div className="ef-home-step-icon" aria-hidden="true">
+                      📝
+                    </div>
+                    <h3 className="ef-home-step-card-title">{t('Questions')}</h3>
+                    <p className="ef-home-step-card-desc">
+                      {t(
+                        'IS, personnel et canal de dépôt : quelques questions pour cadrer votre déclaration.',
+                      )}
+                    </p>
+                  </div>
+                  <div className="ef-home-step-card">
+                    <div className="ef-home-step-number">3</div>
+                    <div className="ef-home-step-icon" aria-hidden="true">
+                      📄
+                    </div>
+                    <h3 className="ef-home-step-card-title">{t('Factures Fatoora')}</h3>
+                    <p className="ef-home-step-card-desc">
+                      {t('Importez vos factures électroniques TEIF (XML) et calculez la TVA.')}
+                    </p>
+                  </div>
+                  <div className="ef-home-step-card">
+                    <div className="ef-home-step-number">4</div>
+                    <div className="ef-home-step-icon" aria-hidden="true">
+                      🏛️
+                    </div>
+                    <h3 className="ef-home-step-card-title">{t('Retenue à la source (TEJ)')}</h3>
+                    <p className="ef-home-step-card-desc">
+                      {t('Exportez le XML sur <strong>tej.finances.gov.tn</strong> puis générez le tableau officiel « Retenue à la source ».')}
+                    </p>
+                  </div>
+                  <div className="ef-home-step-card">
+                    <div className="ef-home-step-number">5</div>
+                    <div className="ef-home-step-icon" aria-hidden="true">
+                      ✅
+                    </div>
+                    <h3 className="ef-home-step-card-title">{t('Formulaire officiel')}</h3>
+                    <p className="ef-home-step-card-desc">
+                      {t('Générez la déclaration mensuelle préremplie et exportez le PDF officiel.')}
+                    </p>
+                  </div>
+                </div>
+              </section>
+
+              <section className="ef-home-faq-section">
+                <h2 className="ef-home-faq-title">{t('Questions Fréquemment Posées')}</h2>
+                <p className="ef-home-faq-subtitle">
+                  {t('Trouvez rapidement les réponses à vos questions')}
+                </p>
+                <div className="ef-home-faq-wrap">
+                  <details className="ef-faq-item">
+                    <summary className="ef-faq-summary">
+                      <span>{t('Quels documents faut-il fournir ?')}</span>
+                      <span className="ef-faq-caret" aria-hidden="true" />
+                    </summary>
+                    <div className="ef-faq-body">
+                      <p>
+                        {t(
+                          'La carte d’identification fiscale et l’extrait RNE de votre entreprise, puis vos factures électroniques du mois. Aucun justificatif papier n’est requis.',
+                        )}
+                      </p>
+                    </div>
+                  </details>
+                  <details className="ef-faq-item">
+                    <summary className="ef-faq-summary">
+                      <span>{t('Comment mes documents sont-ils lus ?')}</span>
+                      <span className="ef-faq-caret" aria-hidden="true" />
+                    </summary>
+                    <div className="ef-faq-body">
+                      <p>
+                        {t(
+                          'Les informations (matricule fiscal, code TVA, code catégorie, forme juridique…) sont extraites automatiquement par OCR puis vérifiées. Vous pouvez corriger chaque champ avant de continuer.',
+                        )}
+                      </p>
+                    </div>
+                  </details>
+                  <details className="ef-faq-item">
+                    <summary className="ef-faq-summary">
+                      <span>{t('Quelles factures puis-je importer ?')}</span>
+                      <span className="ef-faq-caret" aria-hidden="true" />
+                    </summary>
+                    <div className="ef-faq-body">
+                      <p>
+                        {t(
+                          'Les factures électroniques au format TEIF / Fatoora (fichiers XML) émises et reçues. La TVA collectée et déductible est calculée automatiquement.',
+                        )}
+                      </p>
+                    </div>
+                  </details>
+                  <details className="ef-faq-item">
+                    <summary className="ef-faq-summary">
+                      <span>{t('Le PDF généré est-il le formulaire officiel ?')}</span>
+                      <span className="ef-faq-caret" aria-hidden="true" />
+                    </summary>
+                    <div className="ef-faq-body">
+                      <p>
+                        {t(
+                          'Oui, la déclaration reprend le formulaire officiel mensuelle2026 (12 pages), prérempli et modifiable. Vérifiez toujours les montants avant le dépôt.',
+                        )}
+                      </p>
+                    </div>
+                  </details>
+                </div>
+              </section>
+
+            </main>
+
+            <footer className="ft-footer">
+              <div className="ft-footer-copy">
+                {t('Tasrih — Déclaration mensuelle Tunisie © 2026')}
+              </div>
+              <div className="ft-footer-links">
+                <span className="ft-footer-link">{t('Informations légales')}</span>
+                <span className="ft-footer-link">{t('Protection des données')}</span>
+                <span className="ft-footer-link">{t('Conditions Générales')}</span>
+              </div>
+            </footer>
+          </div>
         )}
 
         {loggedIn && (
           <>
             <header className="topbar">
-              <button
-                type="button"
-                className="logo-row logo-btn"
-                onClick={() => setStep(0)}
-                title="Accueil"
-              >
-                <img src="/favicon.svg" alt="" className="logo-mark" width={28} height={28} />
+              <div className="logo-row">
+                <img src="/tasrih-mark.png" alt="" className="logo-mark" width={32} height={32} />
                 <p className="logo-mini">Tasrih</p>
-              </button>
+              </div>
               <div className="progress">
                 {STEPS.map((label, i) => (
                   <i
                     key={label}
                     className={progressIndex === i ? 'on' : progressIndex > i ? 'done' : ''}
-                    title={label}
+                    title={t(label)}
                   />
                 ))}
               </div>
               <div className="topbar-actions">
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => setStep(0)}
-                >
-                  Accueil
-                </button>
-                <span className="topbar-user" title={user?.email}>
-                  {user?.email}
-                </span>
+                <LangToggle />
+                <div className="topbar-user-block">
+                  <button
+                    type="button"
+                    className="topbar-settings-btn"
+                    onClick={() => {
+                      setProfileSaved(false)
+                      setShowSettings(true)
+                    }}
+                  >
+                    {t('Mes paramètres')}
+                  </button>
+                  <div className="topbar-user" title={user?.email}>
+                    <span className="topbar-avatar" aria-hidden="true">
+                      {(user?.email?.[0] || '?').toUpperCase()}
+                    </span>
+                    <span className="topbar-email">{user?.email}</span>
+                  </div>
+                </div>
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
                   onClick={() => void logout()}
                 >
-                  Déconnexion
+                  {t('Déconnexion')}
                 </button>
               </div>
             </header>
 
-            {error && <p className="error">{error}</p>}
-
-            {/* —— 0. ACCUEIL —— */}
-            {step === 0 && (
-              <section className="panel home-panel" data-spotlight="home">
-                <p className="home-hello">
-                  Bonjour{user?.email ? ` ${user.email.split('@')[0]}` : ''} 👋
-                </p>
-                <h2>Votre déclaration mensuelle</h2>
-                <p className="sub">
-                  Bienvenue sur Tasrih. Reprenez votre parcours là où vous l’avez laissé ou
-                  lancez une nouvelle déclaration.
-                </p>
-
-                <div className="home-grid">
-                  <button
-                    type="button"
-                    className="home-card home-card-primary"
-                    onClick={() => setStep(resumeStep)}
-                  >
-                    <span className="home-card-icon" aria-hidden="true">🧾</span>
-                    <strong>{homeCta}</strong>
-                    <span className="home-card-sub">{homeHint}</span>
-                  </button>
-                  <button type="button" className="home-card" onClick={() => setStep(1)}>
-                    <span className="home-card-icon" aria-hidden="true">📝</span>
-                    <strong>Questions</strong>
-                    <span className="home-card-sub">IS, personnel, canal de dépôt</span>
-                  </button>
-                  <button type="button" className="home-card" onClick={() => setStep(3)}>
-                    <span className="home-card-icon" aria-hidden="true">📄</span>
-                    <strong>Scanner mes documents</strong>
-                    <span className="home-card-sub">Carte fiscale · extrait RNE · factures</span>
-                  </button>
-                  {filled && (
-                    <button type="button" className="home-card" onClick={() => setStep(6)}>
-                      <span className="home-card-icon" aria-hidden="true">✅</span>
-                      <strong>Formulaire rempli</strong>
-                      <span className="home-card-sub">Consulter / exporter le PDF officiel</span>
+            {showSettings && (
+              <div className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+                <div
+                  className="settings-modal-backdrop"
+                  onClick={() => setShowSettings(false)}
+                  aria-hidden="true"
+                />
+                <div className="settings-modal-card">
+                  <header className="settings-head">
+                    <div>
+                      <p className="settings-kicker">{t('Compte')}</p>
+                      <h2 id="settings-title">{t('Paramètres du profil')}</h2>
+                      <p className="settings-sub">
+                        {t(
+                          'Prérempli depuis votre carte fiscale et votre extrait RNE. Modifiez à tout moment, puis enregistrez.',
+                        )}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="settings-close"
+                      aria-label={t('Fermer')}
+                      onClick={() => setShowSettings(false)}
+                    >
+                      ×
                     </button>
-                  )}
+                  </header>
+
+                  <div className="settings-account">
+                    <span className="topbar-avatar lg" aria-hidden="true">
+                      {(user?.email?.[0] || '?').toUpperCase()}
+                    </span>
+                    <div>
+                      <strong>{user?.email}</strong>
+                      {user?.phone ? <span>{user.phone}</span> : null}
+                    </div>
+                  </div>
+
+                  <div className="profile-card settings-fields">
+                    <div className="grid-2">
+                      <div className="field">
+                        <label>{t('Raison sociale / Nom')}</label>
+                        <input
+                          value={profileDraft.name}
+                          onChange={(e) =>
+                            setProfileDraft({ ...profileDraft, name: e.target.value })
+                          }
+                        />
+                      </div>
+                      <div className="field">
+                        <label>{t('Matricule fiscal')}</label>
+                        <input
+                          value={profileDraft.tax_id}
+                          onChange={(e) =>
+                            setProfileDraft({ ...profileDraft, tax_id: e.target.value })
+                          }
+                        />
+                      </div>
+                      <div className="field">
+                        <label>{t('Code TVA')}</label>
+                        <input
+                          value={profileDraft.vat_code}
+                          onChange={(e) =>
+                            setProfileDraft({ ...profileDraft, vat_code: e.target.value })
+                          }
+                        />
+                      </div>
+                      <div className="field">
+                        <label>{t('Code catégorie')}</label>
+                        <input
+                          value={profileDraft.category_code}
+                          onChange={(e) =>
+                            setProfileDraft({ ...profileDraft, category_code: e.target.value })
+                          }
+                        />
+                      </div>
+                      <div className="field">
+                        <label>{t('Identifiant RNE')}</label>
+                        <input
+                          value={profileDraft.rne_identifier}
+                          onChange={(e) =>
+                            setProfileDraft({ ...profileDraft, rne_identifier: e.target.value })
+                          }
+                        />
+                      </div>
+                      <div className="field">
+                        <label>{t('Nom commercial')}</label>
+                        <input
+                          value={profileDraft.commercial_name}
+                          onChange={(e) =>
+                            setProfileDraft({ ...profileDraft, commercial_name: e.target.value })
+                          }
+                        />
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label>{t('Adresse')}</label>
+                      <input
+                        value={profileDraft.address}
+                        onChange={(e) =>
+                          setProfileDraft({ ...profileDraft, address: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="field">
+                      <label>{t('Activité')}</label>
+                      <input
+                        value={profileDraft.activity}
+                        onChange={(e) =>
+                          setProfileDraft({ ...profileDraft, activity: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="grid-2">
+                      <div className="field">
+                        <label>{t('Forme juridique')}</label>
+                        <select
+                          value={(() => {
+                            const cur = profileDraft.legal_form.trim()
+                            const byLabel = LEGAL_FORMS.find((f) => f.label === cur)
+                            if (byLabel) return byLabel.label
+                            const byCode = LEGAL_FORMS.find((f) =>
+                              cur.toUpperCase().startsWith(f.code),
+                            )
+                            return byCode?.label || ''
+                          })()}
+                          onChange={(e) =>
+                            setProfileDraft({ ...profileDraft, legal_form: e.target.value })
+                          }
+                        >
+                          <option value="">{t('Choisir (extrait RNE)…')}</option>
+                          {LEGAL_FORMS.map((f) => (
+                            <option key={f.code} value={f.label}>
+                              {f.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="field">
+                        <label>{t('Statut TVA (carte)')}</label>
+                        <input
+                          value={profileDraft.vat_status}
+                          onChange={(e) =>
+                            setProfileDraft({ ...profileDraft, vat_status: e.target.value })
+                          }
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="settings-actions">
+                    {profileSaved && (
+                      <p className="settings-saved" role="status">
+                        {t('Modifications enregistrées')}
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      disabled={busyProfile}
+                      onClick={() => setShowSettings(false)}
+                    >
+                      {t('Fermer')}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={busyProfile}
+                      onClick={() => void persistProfile()}
+                    >
+                      {busyProfile
+                        ? t('Enregistrement…')
+                        : t('Sauvegarder les modifications')}
+                    </button>
+                  </div>
                 </div>
-              </section>
+              </div>
             )}
+
+            {error && <p className="error">{error}</p>}
 
             {/* —— 1. QUESTIONS (one screen each) —— */}
             {step === 1 && qIndex === 0 && (
@@ -947,15 +1682,15 @@ export default function App() {
               <section className="panel" data-spotlight="employees">
                 <h2>Documents du personnel</h2>
                 <p className="sub">
-                  Pour chaque employé, déposez le <strong>contrat de travail</strong> et la{' '}
-                  <strong>fiche CNSS</strong>.
+                  Pour chaque employé, déposez le <strong>contrat de travail</strong>, la{' '}
+                  <strong>fiche CNSS</strong> et la <strong>fiche de paie</strong>.
                 </p>
                 <form className="profile-card" onSubmit={(e) => void uploadEmployee(e)}>
                   <div className="field">
                     <label>Nom de l’employé</label>
                     <input value={empName} onChange={(e) => setEmpName(e.target.value)} />
                   </div>
-                  <div className="grid-2">
+                  <div className="grid-3">
                     <label className={`scan-zone compact${busyEmp ? ' busy' : ''}`}>
                       <input
                         type="file"
@@ -968,14 +1703,18 @@ export default function App() {
                       </strong>
                       <p>PDF ou photo</p>
                     </label>
+                    <div className="scan-zone compact static" aria-disabled="true">
+                      <strong>Fiche CNSS</strong>
+                      <p>Zone statique — aucun dépôt</p>
+                    </div>
                     <label className={`scan-zone compact${busyEmp ? ' busy' : ''}`}>
                       <input
                         type="file"
                         accept=".pdf,image/*"
                         disabled={busyEmp}
-                        onChange={(e) => setEmpCnss(e.target.files?.[0] || null)}
+                        onChange={(e) => setEmpPayslip(e.target.files?.[0] || null)}
                       />
-                      <strong>{empCnss ? empCnss.name : 'Fiche CNSS'}</strong>
+                      <strong>{empPayslip ? empPayslip.name : 'Fiche de paie'}</strong>
                       <p>PDF ou photo</p>
                     </label>
                   </div>
@@ -990,7 +1729,7 @@ export default function App() {
                         <strong>{emp.employee_name}</strong>
                         <span>
                           Contrat {emp.has_contract ? 'OK' : '—'} · CNSS{' '}
-                          {emp.has_cnss ? 'OK' : '—'}
+                          {emp.has_cnss ? 'OK' : '—'} · Paie {emp.has_payslip ? 'OK' : '—'}
                         </span>
                       </li>
                     ))}
@@ -1096,17 +1835,170 @@ export default function App() {
                         )
                         return
                       }
-                      setStep(4)
+                      setStep(8)
                     }}
                   >
-                    Voir le profil entreprise
+                    Continuer
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {/* —— 8. VÉRIFICATION DES DOCUMENTS EXTRAITS —— */}
+            {step === 8 && (
+              <section className="panel" data-spotlight="verify">
+                <h2>Vérification des documents</h2>
+                <p className="sub">
+                  Voici ce qui a été extrait de la carte fiscale et de l’extrait RNE.{' '}
+                  <strong>Corrigez directement les valeurs fausses</strong> (les champs vides
+                  sont marqués « Non extrait ») — vos corrections seront utilisées pour la
+                  déclaration.
+                </p>
+
+                <div className="result-grid">
+                  <div className="block">
+                    <h3>Carte d’identification fiscale</h3>
+                    <div className="extract-list">
+                      <ExtractRow
+                        label="Matricule fiscal"
+                        value={cif?.tax_id}
+                        onChange={(v) => updateCif({ tax_id: v })}
+                      />
+                      <ExtractRow
+                        label="Code TVA"
+                        value={cif?.vat_code}
+                        onChange={(v) => updateCif({ vat_code: v })}
+                      />
+                      <ExtractRow
+                        label="Code catégorie"
+                        value={cif?.category_code}
+                        onChange={(v) => updateCif({ category_code: v })}
+                      />
+                      <ExtractRow
+                        label="Établissement secondaire"
+                        value={cif?.secondary_establishment}
+                        onChange={(v) => updateCif({ secondary_establishment: v })}
+                      />
+                      <ExtractRow
+                        label="Nom / raison sociale"
+                        value={cif?.name}
+                        onChange={(v) => updateCif({ name: v })}
+                      />
+                      <ExtractRow
+                        label="Activité principale"
+                        value={cif?.main_activity}
+                        onChange={(v) => updateCif({ main_activity: v })}
+                      />
+                      <ExtractRow
+                        label="Adresse"
+                        value={cif?.address}
+                        onChange={(v) => updateCif({ address: v })}
+                      />
+                      <ExtractRow
+                        label="Statut TVA (carte)"
+                        value={cif?.vat_status}
+                        onChange={(v) => updateCif({ vat_status: v })}
+                      />
+                    </div>
+                    <p className="extract-conf">
+                      Confiance : {cif ? `${(cif.confidence * 100).toFixed(0)}%` : '—'}
+                    </p>
+                  </div>
+
+                  <div className="block">
+                    <h3>Extrait RNE</h3>
+                    <div className="extract-list">
+                      <ExtractRow
+                        label="Identifiant RNE"
+                        value={rne?.rne_identifier}
+                        onChange={(v) => updateRne({ rne_identifier: v })}
+                      />
+                      <ExtractRow
+                        label="Forme juridique"
+                        value={rne?.legal_form}
+                        onChange={(v) => updateRne({ legal_form: v })}
+                      />
+                      <ExtractRow
+                        label="Dénomination"
+                        value={rne?.company_name}
+                        onChange={(v) => updateRne({ company_name: v })}
+                      />
+                      <ExtractRow
+                        label="Nom commercial"
+                        value={rne?.commercial_name_latin || rne?.commercial_name}
+                        onChange={(v) => updateRne({ commercial_name_latin: v, commercial_name: v })}
+                      />
+                      <ExtractRow
+                        label="Capital"
+                        value={rne?.capital}
+                        onChange={(v) =>
+                          updateRne({
+                            capital: v.trim() === '' ? null : Number(v.replace(/[^\d.]/g, '')) || null,
+                          })
+                        }
+                      />
+                      <ExtractRow
+                        label="Adresse (siège)"
+                        value={rne?.registered_address}
+                        onChange={(v) => updateRne({ registered_address: v })}
+                      />
+                      <ExtractRow
+                        label="Activité"
+                        value={rne?.main_activity}
+                        onChange={(v) => updateRne({ main_activity: v })}
+                      />
+                      <ExtractRow
+                        label="Date d’immatriculation"
+                        value={rne?.registration_date}
+                        onChange={(v) => updateRne({ registration_date: v })}
+                      />
+                    </div>
+                    <p className="extract-conf">
+                      Confiance : {rne ? `${(rne.confidence * 100).toFixed(0)}%` : '—'}
+                    </p>
+                  </div>
+                </div>
+
+                {(cif?.warnings?.length || rne?.warnings?.length) && (
+                  <div className="warn-list">
+                    <h3>À vérifier</h3>
+                    <ul>
+                      {(cif?.warnings || []).map((w, i) => (
+                        <li key={`cif-${i}`}>CIF : {w}</li>
+                      ))}
+                      {(rne?.warnings || []).map((w, i) => (
+                        <li key={`rne-${i}`}>RNE : {w}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                <div className="actions">
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => {
+                      const next = buildProfileFromDocs(cif, rne)
+                      void persistProfile(next)
+                      setQIndex(0)
+                      setStep(1)
+                    }}
+                  >
+                    Confirmer et continuer
                   </button>
                   <button
                     type="button"
                     className="btn btn-ghost"
-                    onClick={() => setStep(onboarding.has_personnel ? 2 : 1)}
+                    onClick={() => setStep(4)}
                   >
-                    Retour
+                    Corriger le profil
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => setStep(3)}
+                  >
+                    Modifier les documents
                   </button>
                 </div>
               </section>
@@ -1254,8 +2146,10 @@ export default function App() {
                   <button
                     type="button"
                     className="btn btn-primary"
-                    disabled={!profileDraft.tax_id.trim() || !profileDraft.name.trim()}
-                    onClick={() => setStep(5)}
+                    disabled={!profileDraft.tax_id.trim() || !profileDraft.name.trim() || busyProfile}
+                    onClick={() => {
+                      void persistProfile().then(() => setStep(5))
+                    }}
                   >
                     Accéder aux factures (Fatoora)
                   </button>
@@ -1309,10 +2203,10 @@ export default function App() {
                   <button
                     type="button"
                     className="btn btn-primary"
-                    disabled={busy || invoices.length === 0}
-                    onClick={() => void runPipeline()}
+                    disabled={busy}
+                    onClick={() => setStep(7)}
                   >
-                    {busy ? 'Calcul…' : 'Remplir la déclaration mensuelle'}
+                    Continuer vers la retenue (TEJ)
                   </button>
                   <button
                     type="button"
@@ -1329,6 +2223,100 @@ export default function App() {
                     Retour profil
                   </button>
                 </div>
+              </section>
+            )}
+
+            {/* —— 7. RETENUE À LA SOURCE (TEJ) —— */}
+            {step === 7 && (
+              <section className="panel" data-spotlight="tej">
+                <h2>Retenue à la source — TEJ</h2>
+                <p className="sub">
+                  Exportez votre déclaration de retenue à la source au format XML depuis le
+                  portail <strong>TEJ</strong> (Tunisie TradeNet), puis importez-la ici. Tasrih
+                  remplit le tableau officiel « Retenue à la source » (جدول الخصم من المورد).
+                </p>
+
+                <div className="tej-grid">
+                  <div className="block">
+                    <h4>1. Portail TEJ</h4>
+                    <p className="sub" style={{ margin: '0.35rem 0 0.5rem' }}>
+                      Connectez-vous à TEJ, déclarez la retenue à la source, puis téléchargez le
+                      fichier <strong>XML</strong> de la déclaration.
+                    </p>
+                    <a
+                      className="btn btn-primary"
+                      href="https://tej.finances.gov.tn/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Ouvrir tej.finances.gov.tn ↗
+                    </a>
+                  </div>
+                  <label
+                    className={`scan-zone compact${busyRetenue ? ' busy' : ''}`}
+                    style={{ display: 'block' }}
+                  >
+                    <input
+                      type="file"
+                      accept=".xml,.xlms,application/xml,text/xml"
+                      multiple
+                      disabled={busyRetenue}
+                      onChange={(e) => void onRetenues(e.target.files)}
+                    />
+                    <strong>
+                      {busyRetenue ? 'Lecture du XML…' : '2. Importer le XML TEJ'}
+                    </strong>
+                    <p>Déclaration de retenue (DeclarationsRS) — un ou plusieurs fichiers</p>
+                  </label>
+                </div>
+
+                {retenues.length > 0 && (
+                  <ul className="inv-list">
+                    {retenues.map((r, i) => (
+                      <li key={`${r.certificate_number || 'ret'}-${i}`}>
+                        <strong>{r.beneficiary || r.certificate_number || 'Bénéficiaire'}</strong>
+                        <span>
+                          {r.beneficiary_tax_id || '—'} · {r.nature || '—'} · Base{' '}
+                          {r.base} · Taux {r.rate ?? '—'}% · Retenue {r.amount} TND
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {retenueDecls.length > 0 && (
+                  <p className="ok-pill">
+                    {retenueDecls.length} déclaration(s) TEJ · total retenue{' '}
+                    {retenueDecls.reduce((s, d) => s + d.total_rs, 0).toFixed(3)} TND · période{' '}
+                    {retenueDecls[0].month ?? '—'}/{retenueDecls[0].year ?? '—'}
+                  </p>
+                )}
+
+                <div className="actions">
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={busy || retenueDecls.length === 0}
+                    onClick={() => void exportRetenuePdf()}
+                  >
+                    {busy ? 'Génération…' : 'Générer le PDF « Retenue à la source »'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    disabled={busy}
+                    onClick={() => void runPipeline()}
+                  >
+                    Remplir la déclaration mensuelle
+                  </button>
+                  <button type="button" className="btn btn-ghost" onClick={() => setStep(5)}>
+                    Retour factures
+                  </button>
+                </div>
+                <p className="foot-note">
+                  Pas de retenue ce mois-ci ? Continuez directement vers la déclaration
+                  mensuelle.
+                </p>
               </section>
             )}
 
@@ -1374,6 +2362,30 @@ export default function App() {
                       </button>
                     </div>
                   </div>
+                  {filled.gap_questions
+                    .filter((g) => g.field !== 'does_withholding')
+                    .map((g) => (
+                      <div className="gap-item" key={g.id}>
+                        <p>{g.question_fr}</p>
+                        <div className="gap-opts">
+                          {g.options.map((opt) => (
+                            <button
+                              key={String(opt.value)}
+                              type="button"
+                              className={
+                                answers[g.field] === opt.value
+                                  ? 'btn btn-primary'
+                                  : 'btn btn-ghost'
+                              }
+                              disabled={busy}
+                              onClick={() => answerGap(g.field, opt.value)}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
                   {answers.does_withholding !== undefined && (
                     <button
                       type="button"
@@ -1419,8 +2431,28 @@ export default function App() {
                         <li>TVA déductible : {filled.amounts.tva_deductible} TND</li>
                       )}
                       <li>TVA nette due : {filled.amounts.tva_nette} TND</li>
+                      {filled.amounts.tva_credit_next > 0 && (
+                        <li>Crédit TVA à reporter : {filled.amounts.tva_credit_next} TND</li>
+                      )}
+                      {filled.amounts.retenues_total > 0 && (
+                        <li>Retenue à la source : {filled.amounts.retenues_total} TND</li>
+                      )}
+                      {filled.amounts.masse_salariale_brute > 0 && (
+                        <li>Masse salariale brute : {filled.amounts.masse_salariale_brute} TND</li>
+                      )}
+                      {filled.amounts.tfp_amount > 0 && (
+                        <li>
+                          TFP : {filled.amounts.tfp_amount} TND ({(filled.amounts.tfp_rate * 100).toFixed(0)}%)
+                        </li>
+                      )}
+                      {filled.amounts.foprolos_amount > 0 && (
+                        <li>FOPROLOS : {filled.amounts.foprolos_amount} TND</li>
+                      )}
                       {filled.amounts.stamp_duty_total > 0 && (
-                        <li>Timbre fiscal : {filled.amounts.stamp_duty_total} TND</li>
+                        <li>
+                          Timbre fiscal : {filled.amounts.stamp_duty_total} TND (
+                          {filled.amounts.stamp_duty_count} facture(s) encaissée(s))
+                        </li>
                       )}
                       {filled.amounts.etablissement_tax_amount > 0 && (
                         <li>
@@ -1445,7 +2477,290 @@ export default function App() {
                       )}
                     </ul>
                   </div>
+                  <div className="block">
+                    <h3>Taxes applicables / sans objet</h3>
+                    <p className="sub" style={{ margin: '0 0 0.5rem' }}>
+                      Domaine d’activité : <strong>{filled.domain || '—'}</strong>
+                    </p>
+                    <ul className="tax-list">
+                      {(filled.tax_lines || []).map((t) => (
+                        <li key={t.key} className={t.applicable ? '' : 'na-line'}>
+                          <span className={t.applicable ? 'tag-on' : 'tag-na'}>
+                            {t.applicable ? '✓' : 'X'}
+                          </span>{' '}
+                          <span>
+                            {t.label_fr}
+                            {!t.applicable && <em> — sans objet</em>}
+                          </span>
+                        </li>
+                      ))}
+                      {(!filled.tax_lines || filled.tax_lines.length === 0) && (
+                        <li>—</li>
+                      )}
+                    </ul>
+                  </div>
                 </div>
+
+                <section className="panel" data-spotlight="amounts">
+                  <h3>Rubriques à remplir</h3>
+                  <p className="sub">
+                    Les valeurs proposées viennent des factures TEIF, des certificats TEJ et des
+                    fiches de paie. Corrigez-les si besoin puis appliquez le recalcul.
+                  </p>
+
+                  {/* 1. Retenue à la source */}
+                  <div className="block">
+                    <h4>1. Retenue à la source (certificats TEJ)</h4>
+                    <label className={`scan-zone${busyRetenue ? ' busy' : ''}`}>
+                      <input
+                        type="file"
+                        accept=".xml,.xlms"
+                        multiple
+                        disabled={busyRetenue}
+                        onChange={(e) => void onRetenues(e.target.files)}
+                      />
+                      <strong>
+                        {busyRetenue
+                          ? 'Lecture du XML…'
+                          : 'Importer les certificats de retenue (XML TEJ)'}
+                      </strong>
+                    </label>
+                    {retenues.length > 0 && (
+                      <ul className="inv-list">
+                        {retenues.map((r, i) => (
+                          <li key={`${r.certificate_number || 'ret'}-${i}`}>
+                            <strong>{r.beneficiary || r.certificate_number || 'Certificat'}</strong>
+                            <span>
+                              Base {r.base} · Taux {r.rate ?? '—'} · Montant {r.amount} TND
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <AmountRow
+                      label="Total retenues (TND)"
+                      field="retenues_total"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                  </div>
+
+                  {/* 2-3. TFP & FOPROLOS */}
+                  <div className="block">
+                    <h4>2-3. TFP &amp; FOPROLOS (masse salariale brute)</h4>
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      disabled={busyPayroll}
+                      onClick={() => void loadPayroll()}
+                    >
+                      {busyPayroll
+                        ? 'Lecture des fiches de paie…'
+                        : 'Calculer depuis les fiches de paie scannées'}
+                    </button>
+                    {payslips.length > 0 && (
+                      <p className="sub">
+                        {payslips.length} fiche(s) de paie · masse brute cumulée sur la
+                        déclaration : {filled.amounts.masse_salariale_brute} TND
+                      </p>
+                    )}
+                    <AmountRow
+                      label="Masse salariale brute (TND)"
+                      field="masse_salariale_brute"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                    <AmountRow
+                      label="TFP — assiette (TND)"
+                      field="tfp_base"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                    <AmountRow
+                      label="TFP — taux en fraction (0.01 manufacture / 0.02 autres)"
+                      field="tfp_rate"
+                      step="0.001"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                    <AmountRow
+                      label="TFP — montant (TND)"
+                      field="tfp_amount"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                    <AmountRow
+                      label="FOPROLOS — assiette (TND)"
+                      field="foprolos_base"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                    <AmountRow
+                      label="FOPROLOS — montant (1%)"
+                      field="foprolos_amount"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                  </div>
+
+                  {/* 4. TVA */}
+                  <div className="block">
+                    <h4>4. TVA collectée / déductible</h4>
+                    <AmountRow
+                      label="CA HT 7%"
+                      field="ca_ht_7"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                    <AmountRow
+                      label="CA HT 13%"
+                      field="ca_ht_13"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                    <AmountRow
+                      label="CA HT 19%"
+                      field="ca_ht_19"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                    <AmountRow
+                      label="TVA collectée (TND)"
+                      field="tva_collectee"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                    <AmountRow
+                      label="TVA déductible (achats)"
+                      field="tva_deductible"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                    <AmountRow
+                      label="Crédit TVA reporté (mois précédent)"
+                      field="tva_credit_report"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                    <AmountRow
+                      label="TVA nette due (TND)"
+                      field="tva_nette"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                    <AmountRow
+                      label="Crédit TVA à reporter"
+                      field="tva_credit_next"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                  </div>
+
+                  {/* 6. Droit de timbre */}
+                  <div className="block">
+                    <h4>6. Droit de timbre fiscal (1 DT / facture encaissée)</h4>
+                    <AmountRow
+                      label="Nombre de factures encaissées"
+                      field="stamp_duty_count"
+                      step="1"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                    <AmountRow
+                      label="Droit de timbre total (TND)"
+                      field="stamp_duty_total"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                  </div>
+
+                  {/* 7. Taxe hôtelière */}
+                  <div className="block">
+                    <h4>7. Taxe hôtelière (2%)</h4>
+                    <AmountRow
+                      label="CA brut établissement hôtelier"
+                      field="hotel_tax_base"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                    <AmountRow
+                      label="Montant taxe hôtelière (TND)"
+                      field="hotel_tax_amount"
+                      amounts={filled.amounts as unknown as Record<string, number>}
+                      edits={amountEdits}
+                      onEdit={editAmount}
+                    />
+                  </div>
+
+                  {materialOverrides.length > 0 && (
+                    <div className="block">
+                      <h4>Motifs des corrections (obligatoire — DGI)</h4>
+                      <p className="sub">
+                        Toute modification d’une valeur matérielle au-delà de{' '}
+                        {OVERRIDE_TOLERANCE_PCT} % doit être justifiée. Ces motifs sont
+                        transmis à l’administration fiscale.
+                      </p>
+                      {materialOverrides.map((o) => (
+                        <div className="override-row" key={o.field}>
+                          <strong>{o.label}</strong>
+                          <span>
+                            Extrait {o.ocr} → saisi {o.manual} ({o.delta > 0 ? '+' : ''}
+                            {o.delta.toFixed(1)} %)
+                          </span>
+                          <input
+                            placeholder="Motif (obligatoire)"
+                            value={fieldComments[o.field] ?? ''}
+                            onChange={(e) =>
+                              setFieldComments((p) => ({ ...p, [o.field]: e.target.value }))
+                            }
+                            className={
+                              !(fieldComments[o.field] || '').trim() ? 'need-comment' : ''
+                            }
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={busy || !hasAmountEdits}
+                      onClick={() => void runPipeline()}
+                    >
+                      {busy ? 'Recalcul…' : 'Appliquer et recalculer'}
+                    </button>
+                    {hasAmountEdits && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        disabled={busy}
+                        onClick={() => setAmountEdits({})}
+                      >
+                        Annuler mes modifications
+                      </button>
+                    )}
+                  </div>
+                </section>
 
                 <form className="actions" onSubmit={(e) => void openOfficialPdf(e)}>
                   <button
@@ -1453,26 +2768,115 @@ export default function App() {
                     className="btn btn-primary"
                     disabled={busy || answers.does_withholding === undefined}
                   >
-                    Réouvrir la déclaration mensuelle
+                    {busy ? 'Génération…' : 'Générer le PDF — Déclaration mensuelle'}
                   </button>
                   <button
                     type="button"
                     className="btn btn-ghost"
                     disabled={busy}
-                    onClick={() => setStep(5)}
+                    onClick={() => setStep(7)}
                   >
-                    Retour factures
+                    Retour retenue (TEJ)
                   </button>
                 </form>
                 <p className="foot-note">
-                  PDF = mensuelle2026 officiel (12 pages) prérempli. Ctrl+S pour enregistrer.
-                  Vérifiez avant dépôt.
+                  Génère le formulaire officiel (12 pages) prérempli avec vos données, puis le
+                  télécharge. Vérifiez les montants avant dépôt.
                 </p>
               </section>
             )}
           </>
         )}
       </div>
+
+      {showAuth && !loggedIn && (
+        <div className="auth-modal" role="dialog" aria-modal="true">
+          <div
+            className="auth-modal-backdrop"
+            onClick={() => setShowAuth(false)}
+            aria-hidden="true"
+          />
+          <div className="auth-modal-card">
+            <button
+              type="button"
+              className="auth-modal-close"
+              aria-label={t('Fermer')}
+              onClick={() => setShowAuth(false)}
+            >
+              ×
+            </button>
+            <h2 className="auth-title">
+              {authMode === 'register' ? t('Créer mon compte') : t('Se connecter')}
+            </h2>
+            <p className="auth-sub">
+              {t('Accédez à votre espace pour préparer votre déclaration mensuelle.')}
+            </p>
+            <form className="auth-card" onSubmit={(e) => void submitAuth(e)}>
+              <div className="auth-tabs">
+                <button
+                  type="button"
+                  className={authMode === 'register' ? 'on' : ''}
+                  onClick={() => setAuthMode('register')}
+                >
+                  {t("S'inscrire")}
+                </button>
+                <button
+                  type="button"
+                  className={authMode === 'login' ? 'on' : ''}
+                  onClick={() => setAuthMode('login')}
+                >
+                  {t('Se connecter')}
+                </button>
+              </div>
+              <div className="field">
+                <label htmlFor="email">{t('Email')}</label>
+                <input
+                  id="email"
+                  type="email"
+                  required
+                  autoComplete="email"
+                  value={authForm.email}
+                  onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="password">{t('Mot de passe')}</label>
+                <input
+                  id="password"
+                  type="password"
+                  required
+                  minLength={6}
+                  autoComplete={authMode === 'register' ? 'new-password' : 'current-password'}
+                  value={authForm.password}
+                  onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                />
+              </div>
+              {authMode === 'register' && (
+                <div className="field">
+                  <label htmlFor="phone">{t('Numéro de téléphone')}</label>
+                  <input
+                    id="phone"
+                    type="tel"
+                    required
+                    autoComplete="tel"
+                    placeholder="+216 …"
+                    value={authForm.phone}
+                    onChange={(e) => setAuthForm({ ...authForm, phone: e.target.value })}
+                  />
+                </div>
+              )}
+              {error && <p className="error">{error}</p>}
+              <button type="submit" className="btn btn-primary" disabled={busy}>
+                {busy
+                  ? t('Patientez…')
+                  : authMode === 'register'
+                    ? t("S'inscrire et continuer")
+                    : t('Se connecter')}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       <AssistantWidget
         step={agentStep}
