@@ -1,4 +1,4 @@
-"""Remplit le PDF officiel mensuelle2026.pdf (12 pages) par overlay."""
+"""Remplit le PDF officiel mensuelle2026.pdf (12 pages) par overlay — sans modifier le gabarit."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from io import BytesIO
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter
+from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -16,10 +17,9 @@ from app.config import BACKEND
 from app.declaration.models import FilledForm
 
 TEMPLATE = BACKEND / "data" / "templates" / "mensuelle2026.pdf"
-# Fallback: official blank imprimés shipped under docs/ (when data/ is empty / gitignored).
 _TEMPLATE_FALLBACKS = [
+    Path(r"C:\Users\maram\Downloads\mensuelle2026.pdf"),
     BACKEND.parent / "docs" / "declaration-mensuelle" / "imprime-officiel-2025.pdf",
-    BACKEND.parent / "docs" / "declaration-mensuelle" / "imprime-officiel-2023.pdf",
 ]
 FONT_PATHS = [
     Path(r"C:\Windows\Fonts\arial.ttf"),
@@ -27,6 +27,9 @@ FONT_PATHS = [
     Path("/usr/share/fonts/TTF/DejaVuSans.ttf"),
     Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
 ]
+
+# Texte ajouté en rouge (lisible sur le gabarit officiel).
+FILL_COLOR = colors.Color(0.78, 0.0, 0.0)
 
 _FONT = "Helvetica"
 
@@ -54,8 +57,7 @@ def _arab(text: str) -> str:
         import arabic_reshaper
         from bidi.algorithm import get_display
 
-        reshaped = arabic_reshaper.reshape(str(text))
-        return get_display(reshaped)
+        return get_display(arabic_reshaper.reshape(str(text)))
     except Exception:
         return str(text)
 
@@ -64,7 +66,10 @@ def _safe_draw_text(text: str, rtl: bool = False) -> str:
     raw = str(text or "")
     if not raw:
         return ""
-    s = _arab(raw) if rtl else raw
+    has_ar = bool(re.search(r"[\u0600-\u06FF]", raw))
+    s = _arab(raw) if (rtl or has_ar) else raw
+    if _FONT != "Helvetica":
+        return s[:90]
     try:
         s.encode("latin-1")
         return s[:90]
@@ -72,14 +77,17 @@ def _safe_draw_text(text: str, rtl: bool = False) -> str:
         return "".join(ch if ord(ch) < 256 else "?" for ch in raw)[:90]
 
 
+def _ink(c: canvas.Canvas) -> None:
+    c.setFillColor(FILL_COLOR)
+
+
 def _draw(c: canvas.Canvas, x: float, y: float, text: str, size: float = 9, rtl: bool = False) -> None:
-    if text is None or text == "":
+    if text is None or str(text).strip() == "":
         return
     font = _ensure_font()
+    _ink(c)
     c.setFont(font, size)
-    s = _safe_draw_text(str(text), rtl=rtl and font != "Helvetica")
-    if font == "Helvetica":
-        s = _safe_draw_text(str(text), rtl=False)
+    s = _safe_draw_text(str(text), rtl=rtl)
     try:
         c.drawString(x, y, s[:90])
     except Exception:
@@ -88,9 +96,17 @@ def _draw(c: canvas.Canvas, x: float, y: float, text: str, size: float = 9, rtl:
         c.drawString(x, y, ascii_s)
 
 
-def _draw_boxes(c: canvas.Canvas, x: float, y: float, text: str, spacing: float = 13, size: float = 10) -> None:
-    """Draw characters into consecutive form boxes."""
+def _draw_boxes(
+    c: canvas.Canvas,
+    x: float,
+    y: float,
+    text: str,
+    spacing: float = 13,
+    size: float = 10,
+) -> None:
+    """Un caractère centré dans chaque case."""
     font = _ensure_font()
+    _ink(c)
     c.setFont(font, size)
     cleaned = re.sub(r"\s+", "", str(text or ""))
     for i, ch in enumerate(cleaned[:24]):
@@ -105,113 +121,131 @@ def _draw_boxes(c: canvas.Canvas, x: float, y: float, text: str, spacing: float 
 def _mark(c: canvas.Canvas, x: float, y: float, on: bool) -> None:
     if not on:
         return
+    _ink(c)
     c.setFont("Helvetica-Bold", 11)
     c.drawString(x, y, "X")
 
 
 def _mark_x(c: canvas.Canvas, x: float, y: float) -> None:
-    """Rubrique sans objet : champ laissé vide + X (au lieu d'une valeur)."""
+    _ink(c)
     c.setFont("Helvetica-Bold", 10)
     c.drawString(x, y, "X")
 
 
+def _fmt(n: float | int | None) -> str:
+    try:
+        return f"{float(n or 0):.3f}"
+    except (TypeError, ValueError):
+        return "0.000"
+
+
 def _clean_address(address: str) -> tuple[str, str]:
-    """Return (address_without_postal, postal_code)."""
     raw = re.sub(r"\s+", " ", (address or "").strip())
     raw = re.sub(r"\bsign\b", "", raw, flags=re.I).strip(" ,+")
     postal = ""
     m = re.search(r"\b(\d{4})\b", raw)
     if m:
         postal = m.group(1)
-        # drop trailing postal from address line if present
         raw = re.sub(rf"\b{postal}\b", "", raw).strip(" ,+")
     return raw, postal
 
 
+def _split_tax_id(tax_id: str) -> tuple[str, str]:
+    """1290021/A → ('1290021', 'A')."""
+    raw = re.sub(r"\s+", "", tax_id or "").upper()
+    if "/" in raw:
+        left, right = raw.split("/", 1)
+        return re.sub(r"\D", "", left), re.sub(r"[^A-Z]", "", right)[:1]
+    return re.sub(r"\D", "", raw), re.sub(r"[^A-Z]", "", raw)[:1]
+
+
 def _page1_overlay(filled: FilledForm) -> bytes:
-    """
-    Coordonnées calibrées sur mensuelle2026.pdf (A4, origin bas-gauche).
-    Année / mois / code · matricule · nom · adresse · CP · activité · cases.
-    """
+    """Page 1 — valeurs en rouge, calées sur les labels du mensuelle2026.pdf."""
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     p = filled.profile
     m = filled.month
     boxes = filled.checkboxes
+    a = filled.amounts
 
-    # —— En-tête: السنة / الشهر / رمز التصريح (cases individuelles)
-    _draw_boxes(c, 125, 724, f"{m.year:04d}", spacing=14.5, size=11)
-    _draw_boxes(c, 238, 724, f"{m.month:02d}", spacing=14.5, size=11)
-    _draw_boxes(c, 325, 724, str(m.declaration_code.value), spacing=14.5, size=11)
+    # —— Année / mois / code : MÊME ligne que libellés y≈720.6 (pas la ligne matricule)
+    # السنة@155 · الشهر@256 · رمز@336 — cases à gauche de chaque libellé
+    _draw_boxes(c, 98, 718, f"{m.year:04d}", spacing=13.2, size=10)
+    _draw_boxes(c, 220, 718, f"{m.month:02d}", spacing=13.2, size=10)
+    _draw_boxes(c, 310, 718, str(m.declaration_code.value), spacing=13.2, size=10)
 
-    # —— المعرف الجبائي (ligne de cases sous l'en-tête)
-    tax_bits = [
-        (p.tax_id or "").replace(" ", ""),
-        (p.vat_code or "").strip(),
-        (p.category_code or "").strip(),
-        (p.secondary_establishment or "").strip(),
-    ]
-    tax_line = " ".join(b for b in tax_bits if b)
-    if tax_line:
-        _draw(c, 165, 698, tax_line[:42], 9)
+    # —— Matricule : cases sous المعرف الجبائي (labels ≈698 → cases ≈680)
+    digits, key = _split_tax_id(p.tax_id or "")
+    etab = re.sub(r"\D", "", p.secondary_establishment or "000")[:3].zfill(3)
+    cat = (p.category_code or "")[:1].upper()
+    vat = (p.vat_code or "")[:1].upper()
+    y_tax = 680
+    _draw_boxes(c, 48, y_tax, etab, spacing=11.5, size=9)
+    _draw(c, 90, y_tax, cat, 9)
+    _draw(c, 115, y_tax, vat, 9)
+    _draw_boxes(c, 175, y_tax, digits[:7], spacing=12.5, size=9)
+    x_slash = 175 + 12.5 * min(7, len(digits[:7]))
+    _draw(c, x_slash + 1, y_tax, "/", 9)
+    if key:
+        _draw(c, x_slash + 12, y_tax, key, 9)
 
-    # —— Identité (lignes pointillées)
-    name = (p.name or "")[:55]
+    # —— Identité
+    name = (p.name or p.commercial_name or "")[:50]
     addr, postal = _clean_address(p.address or "")
     if not postal and p.postal_code:
         postal = re.sub(r"\D", "", p.postal_code)[:4]
-    # drop leading establishment noise like "000 "
-    addr = re.sub(r"^0{2,3}\s*", "", addr).strip(" ,+")
-    addr = addr[:60]
-    activity = (p.activity or "")[:50]
+    addr = re.sub(r"^0{2,3}\s*", "", addr).strip(" ,+")[:60]
 
-    _draw(c, 40, 658, name, 9)
-    _draw(c, 40, 641, addr, 8)
+    _draw(c, 48, 656, name, 9)
+    _draw(c, 48, 643, addr, 8)
     if postal:
-        _draw_boxes(c, 108, 622, postal[:4], spacing=14, size=10)
-    _draw(c, 40, 611, activity, 9)
+        _draw_boxes(c, 48, 630, postal[:4], spacing=12.5, size=9)
 
-    # —— Cases type d'impôt (ligne horizontale)
-    _mark(c, 518, 546, boxes.get("خصم_من_المورد", False))
-    _mark(c, 462, 546, boxes.get("الأداء_على_التكوين_المهني", False))
-    _mark(c, 400, 546, boxes.get("صندوق_النهوض_بالمسكن", False))
-    _mark(c, 338, 546, boxes.get("المعلوم_على_الاستهلاك", False))
-    _mark(c, 282, 546, boxes.get("الأداء_على_القيمة_المضافة", False))
-    _mark(c, 228, 546, boxes.get("معاليم_أخرى_على_رقم_المعاملات", False))
-    _mark(c, 172, 546, boxes.get("معلوم_الطابع_الجبائي", False))
-    _mark(c, 118, 541, boxes.get("المعلوم_على_المؤسسات", False))
-    _mark(c, 74, 541, boxes.get("المعلوم_على_النزل", False))
-    _mark(c, 40, 541, boxes.get("معلوم_الإجازة", False))
+    # —— Activité : pointillés النشاط seulement (x≈300–420).
+    # Ne jamais écrire sur تاريخ توقيف / اليوم / الشهر / السنة.
+    _draw(c, 300, 616, (p.activity or "")[:28], 8)
+
+    # —— Cases type d'impôt
+    _mark(c, 512, 522, boxes.get("خصم_من_المورد", False))
+    _mark(c, 455, 522, boxes.get("الأداء_على_التكوين_المهني", False))
+    _mark(c, 388, 522, boxes.get("صندوق_النهوض_بالمسكن", False))
+    _mark(c, 330, 522, boxes.get("المعلوم_على_الاستهلاك", False))
+    _mark(c, 275, 522, boxes.get("الأداء_على_القيمة_المضافة", False))
+    _mark(c, 212, 522, boxes.get("معاليم_أخرى_على_رقم_المعاملات", False))
+    _mark(c, 165, 522, boxes.get("معلوم_الطابع_الجبائي", False))
+    _mark(c, 112, 522, boxes.get("المعلوم_على_المؤسسات", False))
+    _mark(c, 70, 522, boxes.get("المعلوم_على_النزل", False))
+    _mark(c, 35, 522, boxes.get("معلوم_الإجازة", False))
+
+    if boxes.get("خصم_من_المورد") and a.retenues_total:
+        _draw(c, 210, 436, _fmt(a.retenue_base_total or a.retenues_total), 8)
+        _draw(c, 38, 436, _fmt(a.retenues_total), 8)
+    elif not boxes.get("خصم_من_المورد"):
+        _mark_x(c, 50, 436)
 
     c.save()
     return buf.getvalue()
 
 
-def _page3_payroll_overlay(filled: FilledForm) -> bytes:
-    """Page 3 : TFP + FOPROLOS (assiette, taux, montant) + retenues à la source."""
+def _page4_tfp_foprolos_overlay(filled: FilledForm) -> bytes:
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     a = filled.amounts
     boxes = filled.checkboxes
-    if boxes.get("الأداء_على_التكوين_المهني"):
-        if a.tfp_amount:
-            _draw(c, 300, 700, f"{a.tfp_base:.3f}", 9)
-            _draw(c, 210, 700, f"{a.tfp_rate * 100:.0f}%", 9)
-            _draw(c, 90, 700, f"{a.tfp_amount:.3f}", 9)
+
+    if boxes.get("الأداء_على_التكوين_المهني") and a.tfp_amount:
+        y = 516 if (a.tfp_rate or 0) <= 0.015 else 500
+        _draw(c, 230, y, _fmt(a.tfp_base), 8)
+        _draw(c, 112, y, _fmt(a.tfp_amount), 8)
     else:
-        _mark_x(c, 90, 700)
-    if boxes.get("صندوق_النهوض_بالمسكن"):
-        if a.foprolos_amount:
-            _draw(c, 300, 600, f"{a.foprolos_base:.3f}", 9)
-            _draw(c, 210, 600, "1%", 9)
-            _draw(c, 90, 600, f"{a.foprolos_amount:.3f}", 9)
+        _mark_x(c, 120, 500)
+
+    if boxes.get("صندوق_النهوض_بالمسكن") and a.foprolos_amount:
+        _draw(c, 270, 210, _fmt(a.foprolos_base), 8)
+        _draw(c, 48, 210, _fmt(a.foprolos_amount), 8)
     else:
-        _mark_x(c, 90, 600)
-    if boxes.get("خصم_من_المورد"):
-        if a.retenues_total:
-            _draw(c, 90, 500, f"{a.retenues_total:.3f}", 9)
-    else:
-        _mark_x(c, 90, 500)
+        _mark_x(c, 55, 210)
+
     c.save()
     return buf.getvalue()
 
@@ -221,29 +255,33 @@ def _page5_tva_overlay(filled: FilledForm) -> bytes:
     c = canvas.Canvas(buf, pagesize=A4)
     a = filled.amounts
     boxes = filled.checkboxes
+
     if not boxes.get("الأداء_على_القيمة_المضافة"):
-        # TVA non applicable : rubrique marquée X (sans objet).
-        _mark_x(c, 55, 470)
+        _mark_x(c, 130, 538)
         c.save()
         return buf.getvalue()
-    if a.ca_ht_19:
-        _draw(c, 270, 536, f"{a.ca_ht_19:.3f}", 9)
-    if a.tva_collectee_19:
-        _draw(c, 135, 536, f"{a.tva_collectee_19:.3f}", 9)
-    if a.ca_ht_13:
-        _draw(c, 270, 549, f"{a.ca_ht_13:.3f}", 9)
+
     if a.ca_ht_7:
-        _draw(c, 270, 561, f"{a.ca_ht_7:.3f}", 9)
-    if a.tva_nette:
-        _draw(c, 55, 470, f"{a.tva_nette:.3f}", 9)
+        _draw(c, 255, 563, _fmt(a.ca_ht_7), 8)
+        _draw(c, 125, 563, _fmt(a.ca_ht_7 * 0.07), 8)
+    if a.ca_ht_13:
+        _draw(c, 255, 550, _fmt(a.ca_ht_13), 8)
+        _draw(c, 125, 550, _fmt(a.ca_ht_13 * 0.13), 8)
+    if a.ca_ht_19 or a.tva_collectee_19:
+        _draw(c, 255, 537, _fmt(a.ca_ht_19 or a.ca_ht), 8)
+        _draw(c, 125, 537, _fmt(a.tva_collectee_19 or a.tva_collectee), 8)
+
     if a.tva_collectee:
-        _draw(c, 135, 500, f"{a.tva_collectee:.3f}", 9)
+        _draw(c, 125, 470, _fmt(a.tva_collectee), 8)
     if a.tva_deductible:
-        _draw(c, 135, 485, f"{a.tva_deductible:.3f}", 9)
+        _draw(c, 125, 455, _fmt(a.tva_deductible), 8)
+    if a.tva_nette:
+        _draw(c, 45, 440, _fmt(a.tva_nette), 9)
     if a.tva_credit_report:
-        _draw(c, 55, 455, f"{a.tva_credit_report:.3f}", 9)
+        _draw(c, 45, 425, _fmt(a.tva_credit_report), 8)
     if a.tva_credit_next:
-        _draw(c, 55, 440, f"{a.tva_credit_next:.3f}", 9)
+        _draw(c, 45, 410, _fmt(a.tva_credit_next), 8)
+
     c.save()
     return buf.getvalue()
 
@@ -253,23 +291,24 @@ def _page8_local_overlay(filled: FilledForm) -> bytes:
     c = canvas.Canvas(buf, pagesize=A4)
     a = filled.amounts
     boxes = filled.checkboxes
-    if a.stamp_duty_total:
-        _draw(c, 40, 780, f"{a.stamp_duty_total:.3f}", 9)
-    if a.stamp_duty_count:
-        _draw(c, 150, 780, str(a.stamp_duty_count), 9)
-    if boxes.get("المعلوم_على_النزل"):
-        if a.hotel_tax_base:
-            _draw(c, 280, 430, f"{a.hotel_tax_base:.3f}", 9)
-            _draw(c, 80, 430, f"{a.hotel_tax_amount:.3f}", 9)
-            _draw(c, 190, 430, f"{a.hotel_tax_rate * 100:.0f}%", 9)
+
+    if a.stamp_duty_count or a.stamp_duty_total:
+        _draw(c, 270, 627, str(int(a.stamp_duty_count or 0)), 9)
+        _draw(c, 50, 627, _fmt(a.stamp_duty_total), 9)
+
+    if boxes.get("المعلوم_على_النزل") and a.hotel_tax_amount:
+        _draw(c, 270, 400, _fmt(a.hotel_tax_base), 8)
+        _draw(c, 180, 400, f"{(a.hotel_tax_rate or 0) * 100:.0f}%", 8)
+        _draw(c, 55, 400, _fmt(a.hotel_tax_amount), 8)
     else:
-        _mark_x(c, 80, 430)
-    if boxes.get("المعلوم_على_المؤسسات"):
-        if a.etablissement_tax_base:
-            _draw(c, 280, 390, f"{a.etablissement_tax_base:.3f}", 9)
-            _draw(c, 80, 390, f"{a.etablissement_tax_amount:.3f}", 9)
+        _mark_x(c, 60, 400)
+
+    if boxes.get("المعلوم_على_المؤسسات") and a.etablissement_tax_amount:
+        _draw(c, 270, 340, _fmt(a.etablissement_tax_base), 8)
+        _draw(c, 55, 340, _fmt(a.etablissement_tax_amount), 8)
     else:
-        _mark_x(c, 80, 390)
+        _mark_x(c, 60, 340)
+
     c.save()
     return buf.getvalue()
 
@@ -286,9 +325,7 @@ def _resolve_template() -> Path:
     for path in _TEMPLATE_FALLBACKS:
         if path.exists():
             return path
-    raise FileNotFoundError(
-        f"Template manquant: {TEMPLATE} (ni imprimé 2025/2023 dans docs/declaration-mensuelle/)"
-    )
+    raise FileNotFoundError(f"Template manquant: {TEMPLATE}")
 
 
 def fill_official_pdf(filled: FilledForm, out_path: Path) -> Path:
@@ -298,7 +335,7 @@ def fill_official_pdf(filled: FilledForm, out_path: Path) -> Path:
 
     overlays = {
         0: _page1_overlay(filled),
-        2: _page3_payroll_overlay(filled),
+        3: _page4_tfp_foprolos_overlay(filled),
         4: _page5_tva_overlay(filled),
         7: _page8_local_overlay(filled),
     }

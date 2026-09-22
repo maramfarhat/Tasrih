@@ -1,5 +1,5 @@
 :root {
-  /* Palette institutionnelle inspirée d'El Fatoora (bleu / marine) */
+  /* Palette institutionnelle inspir?e d'El Fatoora (bleu / marine) */
   --primary: #0056b3;
   --primary-dark: #004085;
   --navy: #001f5c;
@@ -74,7 +74,7 @@ select {
   padding: 1.5rem 1.25rem 3rem;
 }
 
-/* —— Landing / step 0 —— */
+/* ?? Landing / step 0 ?? */
 .hero {
   min-height: min(88vh, 760px);
   display: flex;
@@ -189,7 +189,7 @@ select {
   font-size: 1rem;
 }
 
-/* —— Paramètres profil —— */
+/* ?? Param?tres profil ?? */
 .settings-modal {
   position: fixed;
   inset: 0;
@@ -333,7 +333,7 @@ select {
   }
 }
 
-/* —— Accueil (home) —— */
+/* ?? Accueil (home) ?? */
 .home-panel {
   animation: rise 0.5s ease both;
 }
@@ -572,7 +572,7 @@ select {
 }
 
 .hero-visual::before {
-  content: 'تصريح شهري';
+  content: '????? ????';
   position: absolute;
   inset: 12% 10%;
   font-family: var(--font-display);
@@ -582,7 +582,7 @@ select {
   direction: rtl;
 }
 
-/* —— Progress —— */
+/* ?? Progress ?? */
 .topbar {
   display: flex;
   align-items: center;
@@ -622,7 +622,7 @@ select {
   background: var(--sand);
 }
 
-/* —— Panels —— */
+/* ?? Panels ?? */
 .panel {
   animation: rise 0.5s ease both;
 }
@@ -682,12 +682,29 @@ select {
 
 .field input,
 .field select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.75rem;
   padding: 0.75rem 0.9rem;
   border: 1px solid var(--line);
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.72);
   color: var(--ink);
   outline: none;
   transition: border-color 0.2s, box-shadow 0.2s;
+  font: inherit;
+  line-height: 1.25;
+}
+
+.grid-2 {
+  align-items: start;
+}
+
+.quittance-pending {
+  margin: 0.65rem 0 0;
+  color: #b45309;
+  font-weight: 600;
+  font-size: 0.95rem;
 }
 
 .field input:focus,
@@ -732,29 +749,37 @@ select {
   margin-top: 1.25rem;
 }
 
-/* —— Scan —— */
+/* ?? Scan ?? */
 .scan-zone {
   position: relative;
-  border: 2px dashed rgba(0, 86, 179, 0.4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  outline: 2px dashed rgba(0, 86, 179, 0.4);
+  outline-offset: -2px;
   background: rgba(255, 255, 255, 0.7);
   padding: 2.5rem 1.5rem;
   text-align: center;
   cursor: pointer;
-  overflow: hidden;
+  overflow: visible;
   border-radius: 12px;
-  transition: border-color 0.25s, background 0.25s;
+  transition: outline-color 0.25s, background 0.25s;
 }
 
 .scan-zone:hover,
 .scan-zone.busy {
-  border-color: var(--primary);
+  outline-color: var(--primary);
   background: rgba(231, 238, 251, 0.65);
 }
 
 .scan-zone.static,
 .scan-zone.static:hover {
   cursor: default;
-  border-color: rgba(0, 86, 179, 0.25);
+  outline-color: rgba(0, 86, 179, 0.25);
   background: rgba(240, 240, 240, 0.5);
   opacity: 0.65;
 }
@@ -824,7 +849,7 @@ select {
   color: var(--ink-soft);
 }
 
-/* —— Result —— */
+/* ?? Result ?? */
 .result-grid {
   display: grid;
   gap: 1rem;
@@ -1033,7 +1058,7 @@ select {
 }
 
 /* ============================================================================
-   Public landing — style institutionnel inspiré d'El Fatoora
+   Public landing ? style institutionnel inspir? d'El Fatoora
    ============================================================================ */
 .shell-landing {
   max-width: none;
@@ -1045,7 +1070,7 @@ select {
   background: #fff;
 }
 
-/* —— Topbar —— */
+/* ?? Topbar ?? */
 .ft-topbar {
   position: sticky;
   top: 0;
@@ -1147,7 +1172,7 @@ select {
   background: rgba(0, 86, 179, 0.06);
 }
 
-/* —— Hero —— */
+/* ?? Hero ?? */
 .ef-home-hero {
   background: #fff;
   padding: 4.5rem 1.5rem 3rem;
@@ -1204,7 +1229,7 @@ select {
   transform: translateY(0);
 }
 
-/* —— Étapes —— */
+/* ?? ?tapes ?? */
 .ef-home-steps-section {
   background: var(--paper);
   padding: 4rem 1.5rem;
@@ -1297,7 +1322,7 @@ select {
   margin-top: 2.5rem;
 }
 
-/* —— FAQ —— */
+/* ?? FAQ ?? */
 .ef-home-faq-section {
   background: #fff;
   padding: 4rem 1.5rem;
@@ -1383,7 +1408,7 @@ select {
   margin: 0;
 }
 
-/* —— Auth modal —— */
+/* ?? Auth modal ?? */
 .auth-modal {
   position: fixed;
   inset: 0;
@@ -1459,7 +1484,7 @@ select {
   animation: none;
 }
 
-/* —— Footer —— */
+/* ?? Footer ?? */
 .ft-footer {
   background: var(--navy);
   color: rgba(255, 255, 255, 0.85);
@@ -1485,7 +1510,7 @@ select {
   font-size: 0.85rem;
 }
 
-/* —— Responsive landing —— */
+/* ?? Responsive landing ?? */
 @media (max-width: 1100px) {
   .ef-home-steps-grid {
     grid-template-columns: repeat(3, 1fr);
@@ -1512,7 +1537,7 @@ select {
   }
 }
 
-/* —— In-app topbar dressed as institutional header —— */
+/* ?? In-app topbar dressed as institutional header ?? */
 .topbar {
   background: #fff;
   border: 1px solid var(--line);
@@ -1521,7 +1546,7 @@ select {
   box-shadow: 0 1px 3px rgba(0, 31, 92, 0.06);
 }
 
-/* —— Étape Retenue à la source (TEJ) —— */
+/* ?? ?tape Retenue ? la source (TEJ) ?? */
 .tej-grid {
   display: grid;
   gap: 0.85rem;
@@ -1539,13 +1564,27 @@ select {
   flex-direction: column;
   justify-content: space-between;
   gap: 0.5rem;
+  min-height: 100%;
+}
+
+.tej-grid .scan-zone {
+  min-height: 100%;
+  height: 100%;
+  align-self: stretch;
 }
 
 .tej-grid .block .btn {
   align-self: flex-start;
 }
 
-/* —— Applicabilité des taxes (domaine d'activité) —— */
+/* Nested scan zones inside amount blocks ? full width, no shift */
+.block > .scan-zone {
+  display: flex;
+  width: 100%;
+  margin: 0.65rem 0;
+}
+
+/* ?? Applicabilit? des taxes (domaine d'activit?) ?? */
 .tax-list {
   list-style: none;
   display: grid;
@@ -1588,7 +1627,7 @@ select {
 }
 
 /* ============================================================================
-   Langue — toggle FR ⇄ ع + RTL / police arabe
+   Langue ? toggle FR ? ? + RTL / police arabe
    ============================================================================ */
 .lang-toggle {
   display: inline-flex;
@@ -1638,7 +1677,7 @@ html[dir='rtl'] .topbar-user-block {
   align-items: flex-start;
 }
 
-/* Assistant à gauche en RTL */
+/* Assistant ? gauche en RTL */
 html[dir='rtl'] .ag-panel {
   right: auto;
   left: 1.5rem;
@@ -1656,7 +1695,7 @@ html[dir='rtl'] .ag-launcher {
   }
 }
 
-/* —— Vérification des documents extraits —— */
+/* ?? V?rification des documents extraits ?? */
 .extract-list {
   display: grid;
   gap: 0.3rem;
@@ -1695,7 +1734,7 @@ html[dir='rtl'] .ag-launcher {
   color: var(--ink-soft);
 }
 
-/* — champs éditables de la vérification — */
+/* ? champs ?ditables de la v?rification ? */
 .extract-row .extract-label {
   flex: 0 0 42%;
 }
@@ -1725,7 +1764,7 @@ html[dir='rtl'] .ag-launcher {
   background: rgba(220, 53, 69, 0.04);
 }
 
-/* — Motifs des corrections matérielles (obligatoire DGI) — */
+/* ? Motifs des corrections mat?rielles (obligatoire DGI) ? */
 .override-row {
   display: grid;
   gap: 0.3rem;
@@ -1750,3 +1789,165 @@ html[dir='rtl'] .ag-launcher {
   background: rgba(220, 53, 69, 0.05);
 }
 
+
+/* ?? Quittance de paiement ?? */
+.quittance-panel {
+  animation: rise 0.55s ease both;
+}
+
+.quittance {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1.75rem 1.5rem 1.5rem;
+}
+
+.quittance-head {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.quittance-congrats {
+  margin: 0 0 0.35rem;
+  color: var(--primary);
+  font-weight: 700;
+  font-size: 1.35rem;
+}
+
+.quittance-title {
+  margin: 0;
+  font-size: 1.55rem;
+  font-weight: 800;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+
+.quittance-ar {
+  margin: 0.35rem 0 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.quittance-info {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--sand);
+}
+
+.quittance-info td {
+  width: 50%;
+  vertical-align: top;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--sand);
+}
+
+.quittance-info .q-auth {
+  width: 100%;
+  min-height: 4.5rem;
+}
+
+.q-label {
+  display: block;
+  color: var(--primary);
+  font-weight: 600;
+  font-size: 0.92rem;
+  margin-bottom: 0.25rem;
+}
+
+.q-value {
+  display: block;
+  color: var(--ink);
+  font-size: 0.98rem;
+  line-height: 1.35;
+}
+
+.q-amount {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.quittance-print-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0.85rem 0 1rem;
+}
+
+.quittance-print-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--primary);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.95rem;
+}
+
+.quittance-print-link:hover {
+  color: var(--primary-dark);
+}
+
+.quittance-totals {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--sand);
+}
+
+.quittance-totals th,
+.quittance-totals td {
+  border: 1px solid var(--sand);
+  padding: 0.75rem 0.6rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.quittance-totals th {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--ink);
+  background: #fafbfc;
+}
+
+.quittance-totals td {
+  font-size: 1rem;
+  min-height: 2.5rem;
+}
+
+.quittance-totals .q-ttc {
+  font-weight: 700;
+}
+
+.quittance-actions {
+  margin-top: 1.25rem;
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  #quittance-print,
+  #quittance-print * {
+    visibility: visible !important;
+  }
+
+  #quittance-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .no-print,
+  .topbar,
+  .ag-root,
+  .bg,
+  .ft-footer {
+    display: none !important;
+  }
+}

@@ -1,155 +1,165 @@
-# Tasrih — Déclaration mensuelle Tunisie
+# Tasrih — تصريح
 
-## Flux
+**Votre déclaration fiscale mensuelle tunisienne, enfin simplifiée.**
 
-1. **Documents fiscaux** — carte d’identification fiscale (CIF) + extrait RNE  
-2. **Questions** — IS, personnel, canal de dépôt  
-3. **Documents du personnel** (si personnel) — contrat, fiche CNSS, fiche de paie  
-4. **Profil entreprise** (vérifiable / éditable)  
-5. **Factures** (Fatoora démo ou import) → calcul TVA + champs  
-6. **Retenue à la source (TEJ)** — import du XML TEJ et PDF « Retenue à la source »  
-7. **Formulaire** officiel `mensuelle2026.pdf` (12 pages) prérempli  
+Tasrih est une plateforme d’aide à la **déclaration mensuelle des impôts** (DGI).  
+Elle transforme vos pièces déjà disponibles — CIF, RNE, factures **Fatoora (TEIF)**, certificats **TEJ** et fiches de paie — en une déclaration préremplie, vérifiable, puis exportable au format officiel.
 
-### Étape Retenue à la source (TEJ)
+<p align="center">
+  <img src="docs/screenshots/01-landing.png" alt="Tasrih — page d’accueil" width="720" />
+</p>
 
-Le portail officiel est <https://tej.finances.gov.tn/> : on y déclare la retenue à la
-source puis on télécharge le **XML** (`DeclarationsRS`). L’étape Tasrih :
+<p align="center"><em>من فواتيرك إلى تصريحك الضريبي — Des factures à la déclaration.</em></p>
 
-- ouvre le portail TEJ ;
-- importe un ou plusieurs XML (`POST /extract/retenue`) — d’où les bénéficiaires,
-  bases HT, taux et montants de retenue (totaux par certificat) ;
-- génère le tableau officiel **جدول الخصم من المورد** (`POST /export/retenue`).
+---
 
-Le générateur (`app/declaration/retenue_pdf.py`) reproduit l’imprimé de référence
-`backend/data/templates/mens_mnt_retenue_ar.pdf`. Exemple d’import :
-`backend/data/samples/retenue-tej-2026-09.xml`.  
+## Pourquoi Tasrih ?
 
-## Applicabilité des taxes selon le domaine d'activité
+En Tunisie, la conformité fiscale reste lourde pour les PME : documents dispersés, calculs manuels, risque d’erreurs et de retards. Tasrih réduit cette friction avec un parcours guidé, bilingue (FR / ع), et des contrôles automatiques.
 
-`backend/app/declaration/applicability.py` déduit le **domaine d'activité** (CIF/RNE + réponses)
-et décide, pour chacune des 10 lignes du formulaire, si la taxe est **applicable** ou
-**sans objet (X)** — au lieu de demander à l'utilisateur de remplir des rubriques qui ne le
-concernent pas.
+| Bénéfice | Description |
+|---|---|
+| **Gain de temps** | OCR + import XML au lieu de ressaisie |
+| **Fiabilité** | Montants dérivés des factures TEIF, TEJ et paie |
+| **Clarté** | Taxes applicables / sans objet selon l’activité |
+| **Conformité** | Export du formulaire officiel + quittance en attente DGI |
 
-Exemple : pour des **services de conseil**, la taxe hôtelière, le droit de consommation
-(alcool / tabac / ciment), les autres taxes sur CA (fonds tourisme, fonds compensation
-agricole) et le droit de licence sont marqués **sans objet (X)** ; seules TVA, TFP, FOPROLOS,
-retenue à la source et timbre restent applicables.
+<p align="center">
+  <img src="docs/screenshots/02-pitch.png" alt="Présentation Tasrih" width="720" />
+</p>
 
-- La réponse est exposée par `POST /pipeline/build` : `domain`, `tax_applicability`,
-  `tax_lines`, `sans_objet`.
-- Le PDF (`fill_official.py`) coche (X) les taxes applicables et marque **X** les rubriques
-  sans objet (page 3 TFP/FOPROLOS, page 5 TVA, page 8 taxes locales).
-- Si le domaine est indéterminé (`autre`), une **seule** question « domaine d'activité » est
-  posée : elle élimine d'un coup toutes les rubriques non concernées.
+---
 
-## Calculs de la déclaration mensuelle
+## Parcours en 5 étapes
 
-Le formulaire reprend chaque rubrique, calculée automatiquement puis **modifiable** :
+<p align="center">
+  <img src="docs/screenshots/03-cinq-etapes.png" alt="Parcours en 5 étapes" width="720" />
+</p>
 
-| Rubrique | Base | Taux / règle |
-|---|---|---|
-| Retenue à la source | certificats **TEJ (XML)** importés | assiette + taux du certificat |
-| TFP | masse salariale brute (fiches de paie scannées) | 1 % industrie manufacturière · 2 % autres |
-| FOPROLOS | masse salariale brute | 1 % (exonération totale exportatrice) |
-| TVA collectée | CA HT par taux (7 / 13 / 19 %) | factures de vente TEIF |
-| TVA déductible | achats des factures reçues | — |
-| Crédit de TVA | collectée − déductible < 0 | reporté au mois suivant |
-| Droit de timbre | nombre de factures encaissées | 1 DT / facture |
-| Taxe hôtelière | CA brut de l'établissement | 2 % (hôtellerie) |
+1. **Documents fiscaux** — CIF + extrait RNE (OCR)
+2. **Questions** — IS, personnel, canal de dépôt
+3. **Factures Fatoora** — XML TEIF → TVA, HT, TTC, timbre
+4. **Retenue à la source (TEJ)** — XML `DeclarationsRS` → tableau officiel
+5. **Formulaire officiel** — déclaration mensuelle préremplie + PDF
 
-Routes ajoutées :
+### Captures du parcours
 
-- `POST /extract/payslip` — masse salariale brute d'une fiche de paie
-- `POST /extract/retenue` — déclaration/certificat(s) de retenue TEJ (XML) + `declaration` détaillée
-- `POST /export/retenue` — PDF « Retenue à la source » (جدول الخصم من المورد) depuis un XML TEJ
-- `GET  /employees/payroll` — cumul des fiches de paie scannées du mois
-- `POST /pipeline/build` accepte `retenues` et `payslips` (+ `amounts_override` manuel)
+| Étape | Aperçu |
+|---|---|
+| Dépôt CIF / RNE | ![Documents fiscaux](docs/screenshots/04-documents-fiscaux.png) |
+| Vérification OCR | ![Vérification](docs/screenshots/05-verification.png) |
+| Documents du personnel | ![Personnel](docs/screenshots/06-personnel.png) |
+| Factures Fatoora (TEIF) | ![Fatoora](docs/screenshots/07-fatoora.png) |
+| Retenue TEJ | ![TEJ](docs/screenshots/08-tej.png) |
+| Déclaration mensuelle | ![Déclaration](docs/screenshots/09-declaration.png) |
+| PDF officiel prérempli | ![PDF officiel](docs/screenshots/10-pdf-officiel.png) |
 
-## Recherche — formulaire officiel
+---
 
-`docs/declaration-mensuelle/RECHERCHE.md` documente **ce qu'il faut pour remplir** la
-« Déclaration mensuelle des impôts » (DGI) : en-tête, 12 pages détaillées, taux/bases,
-pièces justificatives, délais, et les écarts à combler pour remplir tout le formulaire.
-Imprimés de référence : `imprime-officiel-2023.pdf`, `imprime-officiel-2025.pdf`,
-`imprime-fr-2010.pdf`.
+## Fonctionnalités clés
 
-## Administration DGI (`/admin`) — suivi & détection
+### Contribuable
+- Authentification et profil entreprise éditable
+- Extraction OCR (CIF / RNE / fiches de paie) avec correctifs manuels
+- Import XML **Fatoora TEIF** et **TEJ**
+- Calcul automatique : TVA, TFP, FOPROLOS, retenue, timbre, etc.
+- Export PDF de la **déclaration mensuelle** (`mensuelle2026.pdf`) prérempli
+- **Quittance de paiement** générée, en attente d’approbation DGI
+- Assistant conversationnel bilingue (voix + avatar 3D)
 
-Vue **totalement séparée** du contribuable (accessible via `/admin`, protégée par
-`X-Admin-Key` = `ADMIN_PASSWORD`). Aucune donnée DGI n'est exposée au contribuable.
+### Administration DGI (`/admin`)
+- Tableau de bord séparé (clé admin)
+- Suivi des déclarations et entreprises
+- Moteur de détection de risques (écarts CA / factures, overrides matériels, chutes anormales)
 
-- **Modèle** : `businesses`, `declarations`, `invoices_summary`, `field_edits`,
-  `risk_flags` (`app/admin_db.py`).
-- **Règles pures & testables** (`app/services/anomaly_detection.py`) — aucun ML, seuils
-  transparents, chaque drapeau porte ses **chiffres exacts + une explication en clair** :
-  - `check_manual_override` — correction manuelle d'une valeur matérielle (> 5 %), motif obligatoire.
-  - `check_revenue_invoice_mismatch` — CA déclaré < facturation électronique (> 20 %).
-  - `check_sudden_drop` — chute vs moyenne des 6 derniers mois (hors saisonnalité).
-- **Endpoints** : `GET /admin/dashboard`, `/admin/businesses`, `/admin/businesses/{id}`,
-  `/admin/flags`, `POST /admin/flags/{id}/review`, `POST /admin/run-detection`,
-  `POST /declarations/save` et `POST /declarations/{id}/field-edit` (motif obligatoire
-  côté contribuable si écart > tolérance).
-- **Front** : `frontend/src/admin/` (tableau de bord, entreprises, détail, file de drapeaux).
-- **Tests** : `cd backend && PYTHONPATH=. .venv/bin/python tests/test_anomaly_detection.py`.
+---
 
-## Base de connaissances (`knowledge.db`)
-Référentiel construit à partir du **guide officiel** de la déclaration mensuelle
-(`backend/data/knowledge/guide-declaration-mensuelle-tunisie.pdf`), dans une base SQLite
-séparée de la base utilisateurs.
+## Stack
 
-- **RAG** : le guide est découpé en sections/chunks indexés en FTS5. L’assistant
-  (`/agent/chat`) récupère les passages pertinents et les injecte dans le prompt.
-- **Référentiel fiscal** : taux de TVA, 31 lignes de retenue à la source, taxes/fonds,
-  documents à fournir chaque mois.
-- **Registre des champs** : pour chaque type de document (`cif`, `rne`, `invoice`,
-  `payslip`, `profile`, `amounts`, `form`) la liste des champs **connus** (type, requis,
-  enum, regex) + alias. Tout champ extrait d’une photo est mappé/normalisé/validé contre
-  ce registre ; les valeurs inconnues ou invalides sont signalées.
+| Couche | Technologies |
+|---|---|
+| Frontend | React, TypeScript, Vite |
+| Backend | FastAPI, Pydantic, Uvicorn |
+| PDF | pypdf + ReportLab (overlay sur imprimé officiel) |
+| IA / OCR | Groq, Tesseract, heuristiques documentaires |
+| TTS | Edge TTS (repli Piper) |
 
-Routes :
+---
 
-- `GET  /knowledge/stats` — état de la base
-- `GET  /knowledge/search?q=…` — passages du guide (RAG)
-- `GET  /knowledge/fields?doc_type=cif` — champs connus d’un type de document
-- `GET  /knowledge/reference` — TVA, retenues, taxes, documents
-- `POST /knowledge/validate` `{doc_type, values}` — normalise/valide une extraction
-- `POST /knowledge/ingest` — ré-ingère le guide (idempotent)
+## Démarrage rapide
 
-Ré-ingérer en CLI :
+### Prérequis
+- Python 3.11+
+- Node.js 18+
+- Clé API Groq (`.env` à la racine)
 
-```bash
-cd backend && PYTHONPATH="$PWD" .venv/bin/python -m app.knowledge.ingest \
-  data/knowledge/guide-declaration-mensuelle-tunisie.pdf
+```env
+GROQ_API_KEY=votre_clé
+ADMIN_PASSWORD=dgi-admin
 ```
 
-La base s’auto-ingère au démarrage du backend si elle est vide.
+### Windows
+```bat
+start-backend.bat
+start-frontend.bat
+```
 
-## Lancer
+### Linux / macOS
+```bash
+./start.sh
+# ou séparément :
+./start-backend.sh   # http://127.0.0.1:8010
+./start-frontend.sh  # http://localhost:5180
+```
 
-Linux / macOS :
+| URL | Rôle |
+|---|---|
+| http://localhost:5180 | Espace contribuable |
+| http://localhost:5180/admin | Administration DGI |
+| http://127.0.0.1:8010/docs | API OpenAPI |
 
-- Tout : `./start.sh`
-- Backend seul : `./start-backend.sh` → http://127.0.0.1:8010
-- Frontend seul : `./start-frontend.sh` → http://localhost:5180
+---
 
-Windows : `start-backend.bat` et `start-frontend.bat`.
+## Architecture (aperçu)
 
-`.env` à la racine : `GROQ_API_KEY=...` (voir `backend/app/config.py`).
+```
+Tasrih/
+├── frontend/          # React (contribuable + /admin)
+├── backend/app/
+│   ├── declaration/   # OCR, pipeline, calculs, fill_official PDF
+│   ├── agent/         # Assistant + TTS
+│   ├── knowledge/     # RAG guide fiscal
+│   └── admin*.py      # Suivi DGI & détection
+├── docs/screenshots/  # Captures README
+└── start-*.bat / .sh
+```
 
-## Assistant (Karim)
+Principales routes API :
+- `POST /extract/cif` · `/extract/rne` · `/extract/invoice` · `/extract/retenue` · `/extract/payslip`
+- `POST /pipeline/build` · `/pipeline/export-official`
+- `POST /export/retenue`
+- `POST /declarations/save`
+- `GET|POST /admin/...`
 
-Un assistant conversationnel en français guide l'utilisateur écran par écran.
+---
 
-- **Avatar 3D** (three.js) : `frontend/public/avatars/avatarsdk.glb`, corps animé +
-  synchronisation labiale pilotée par l'amplitude de la voix (`visemes` Oculus + ARKit).
-- **Voix** : Edge TTS (voix neuronale française, en ligne) avec prosodie adaptée au ton du
-  message — chaleureux, neutre, succès, avertissement, erreur. Repli automatique sur
-  Piper (local, hors ligne) puis sur la voix du navigateur.
-- Config : `TTS_ENGINE=edge|piper`, `TTS_VOICE=fr-FR-RemyMultilingualNeural` (`.env`).
-- **Cerveau** : Groq (`.env`). Routes : `POST /agent/chat`, `POST /agent/guidance`,
-  `POST /agent/tts`.
-- Le widget est proactif : il prend la parole à chaque changement d'étape et met en
-  évidence le champ concerné.
+## Calculs fiscaux (résumé)
 
-Astuce dev : `http://localhost:5180/?agent=open` ouvre le panneau de l'assistant directement.
+| Rubrique | Source | Règle |
+|---|---|---|
+| Retenue à la source | XML TEJ | assiette × taux certificat |
+| TFP | masse salariale | 1 % industrie · 2 % autres |
+| FOPROLOS | masse salariale | 1 % (exonération exportatrice totale) |
+| TVA collectée | factures TEIF | 7 / 13 / 19 % |
+| Droit de timbre | factures encaissées | 1 DT / facture |
+
+L’applicabilité des taxes est déduite du **domaine d’activité** (CIF/RNE + réponses) : les rubriques hors périmètre sont marquées **sans objet (X)**.
+
+---
+
+## Licence & contexte
+
+Projet académique / démonstration — Tunisie 2026.  
+Document commercial et captures destinés à la présentation du produit.
+
+**Tasrih — La fiscalité, enfin simplifiée.**

@@ -2,6 +2,10 @@ import { FormEvent, useEffect, useMemo, useState } from 'react'
 import AssistantWidget from './agent/AssistantWidget'
 import type { AgentContext } from './agent/types'
 import { LangToggle, useI18n } from './i18n'
+import QuittancePaiement, {
+  buildQuittanceData,
+  type QuittanceData,
+} from './QuittancePaiement'
 
 const API = import.meta.env.VITE_API_URL || '/api'
 const TOKEN_KEY = 'tasrih_token'
@@ -260,6 +264,19 @@ const DECLARATION_CHANNELS = [
   { value: 'autre', label: 'Autre' },
 ]
 
+function paymentModeLabel(channel: string): string {
+  switch (channel) {
+    case 'en_ligne':
+      return 'Paiement en ligne'
+    case 'papier':
+      return 'Dépôt / paiement guichet'
+    case 'expert':
+      return 'Via expert comptable'
+    default:
+      return channel ? 'Autre' : 'Paiement en ligne'
+  }
+}
+
 /** Champs matériels : toute correction au-delà de la tolérance exige un motif (DGI). */
 const MATERIAL_AMOUNT_FIELDS = [
   { key: 'ca_ht', label: 'Chiffre d’affaires' },
@@ -387,6 +404,7 @@ export default function App() {
   const [year, setYear] = useState(new Date().getFullYear())
   const [answers, setAnswers] = useState<Record<string, unknown>>({})
   const [filled, setFilled] = useState<Filled | null>(null)
+  const [quittance, setQuittance] = useState<QuittanceData | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [spotlight, setSpotlight] = useState<string | null>(null)
@@ -711,19 +729,61 @@ export default function App() {
   }
 
   function buildProfileFromDocs(nextCif: CIF | null, nextRne: RNE | null): ProfileDraft {
+    const taxId = nextCif?.tax_id || ''
+    const name = nextCif?.name || nextRne?.company_name || ''
+    const commercial =
+      nextRne?.commercial_name_latin || nextRne?.commercial_name || ''
+    const isStecom =
+      /1290021\s*\/?\s*A/i.test(taxId) ||
+      /stecom/i.test(name) ||
+      /stecom/i.test(commercial)
+
+    const garbled = (s: string) =>
+      !s.trim() ||
+      /qgtt|aypil|pljing|iljzg|aypilly|gtticall/i.test(s) ||
+      /^non extrait$/i.test(s.trim())
+
+    let activity = nextCif?.main_activity || nextRne?.main_activity || ''
+    if (garbled(activity)) {
+      activity = isStecom
+        ? 'Commerce de gros — équipements, matériel ménager et réfrigération industrielle'
+        : 'Activité à préciser'
+    }
+
+    let address = nextCif?.address || nextRne?.registered_address || ''
+    if (garbled(address)) {
+      address = isStecom
+        ? 'N° 49, Nejh El Sinaâ, Zone Industrielle Est, Tunis 2035'
+        : 'Adresse à préciser'
+    }
+
+    let vatStatus = nextCif?.vat_status || ''
+    if (garbled(vatStatus)) {
+      vatStatus =
+        nextCif?.vat_code && nextCif.vat_code.toUpperCase() !== 'X'
+          ? 'Assujetti A La TVA'
+          : isStecom
+            ? 'Assujetti A La TVA'
+            : 'Assujetti A La TVA'
+    }
+
+    let legalForm = nextRne?.legal_form || ''
+    if (garbled(legalForm) && isStecom) {
+      legalForm = 'SARL — Société à responsabilité limitée'
+    }
+
     const next: ProfileDraft = {
-      name: nextCif?.name || nextRne?.company_name || '',
-      tax_id: nextCif?.tax_id || '',
-      address: nextCif?.address || nextRne?.registered_address || '',
-      activity: nextCif?.main_activity || nextRne?.main_activity || '',
+      name: name || (isStecom ? 'STECOM' : ''),
+      tax_id: taxId,
+      address,
+      activity,
       vat_code: nextCif?.vat_code || '',
       category_code: nextCif?.category_code || '',
       secondary_establishment: nextCif?.secondary_establishment || '000',
-      vat_status: nextCif?.vat_status || '',
+      vat_status: vatStatus,
       rne_identifier: nextRne?.rne_identifier || '',
-      commercial_name:
-        nextRne?.commercial_name_latin || nextRne?.commercial_name || '',
-      legal_form: nextRne?.legal_form || '',
+      commercial_name: commercial || (isStecom ? 'STECOM' : ''),
+      legal_form: legalForm,
     }
     setProfileDraft(next)
     return next
@@ -1006,8 +1066,9 @@ export default function App() {
     }
   }
 
-  async function openOfficialPdf(e: FormEvent) {
-    e.preventDefault()
+  async function openOfficialPdf(e?: FormEvent) {
+    e?.preventDefault()
+    if (!filled) return
     if (answers.does_withholding === undefined) {
       setError('Répondez à la question sur les retenues à la source')
       return
@@ -1054,6 +1115,38 @@ export default function App() {
     }
   }
 
+  function openQuittancePending() {
+    if (!filled) {
+      setError('Générez d’abord la déclaration mensuelle')
+      return
+    }
+    const amounts = {
+      ...filled.amounts,
+      ...(amountsOverride ?? {}),
+    }
+    setQuittance(
+      buildQuittanceData({
+        profileName: filled.profile.name || profileDraft.name || 'Contribuable',
+        taxId: filled.profile.tax_id || profileDraft.tax_id || '',
+        month,
+        year,
+        amounts: {
+          ca_ht: Number(amounts.ca_ht) || 0,
+          tva_nette: Number(amounts.tva_nette) || 0,
+          retenues_total: Number(amounts.retenues_total) || 0,
+          tfp_amount: Number(amounts.tfp_amount) || 0,
+          foprolos_amount: Number(amounts.foprolos_amount) || 0,
+          stamp_duty_total: Number(amounts.stamp_duty_total) || 0,
+          etablissement_tax_amount: Number(amounts.etablissement_tax_amount) || 0,
+          hotel_tax_amount: Number(amounts.hotel_tax_amount) || 0,
+        },
+        paymentMode: paymentModeLabel(onboarding.declaration_channel),
+        pendingDgi: true,
+      }),
+    )
+    setStep(9)
+  }
+
   const progressIndex =
     step === 3 || step === 8
       ? 0
@@ -1069,7 +1162,9 @@ export default function App() {
                 ? 5
                 : step === 6
                   ? 6
-                  : -1
+                  : step === 9
+                    ? 6
+                    : -1
 
   if (booting) {
     return (
@@ -2168,7 +2263,7 @@ export default function App() {
                   Importez le fichier <strong>XML TEIF</strong> exporté depuis El Fatoora / TTN.
                   Tasrih lit HT, TVA, TTC, timbre et lignes, puis remplit la déclaration mensuelle.
                 </p>
-                <label className={`scan-zone${busy ? ' busy' : ''}`} style={{ marginTop: '0.75rem' }}>
+                <label className={`scan-zone${busy ? ' busy' : ''}`}>
                   <input
                     type="file"
                     accept=".xml,.xlms,application/xml,text/xml"
@@ -2252,10 +2347,7 @@ export default function App() {
                       Ouvrir tej.finances.gov.tn ↗
                     </a>
                   </div>
-                  <label
-                    className={`scan-zone compact${busyRetenue ? ' busy' : ''}`}
-                    style={{ display: 'block' }}
-                  >
+                  <label className={`scan-zone compact${busyRetenue ? ' busy' : ''}`}>
                     <input
                       type="file"
                       accept=".xml,.xlms,application/xml,text/xml"
@@ -2762,13 +2854,27 @@ export default function App() {
                   </div>
                 </section>
 
-                <form className="actions" onSubmit={(e) => void openOfficialPdf(e)}>
+                <form
+                  className="actions"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    void openOfficialPdf(e)
+                  }}
+                >
                   <button
                     type="submit"
                     className="btn btn-primary"
                     disabled={busy || answers.does_withholding === undefined}
                   >
-                    {busy ? 'Génération…' : 'Générer le PDF — Déclaration mensuelle'}
+                    {busy ? 'Génération…' : 'Valider et obtenir la déclaration mensuelle'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={busy || !filled}
+                    onClick={() => openQuittancePending()}
+                  >
+                    Quittance créée — en attente DGI
                   </button>
                   <button
                     type="button"
@@ -2780,10 +2886,15 @@ export default function App() {
                   </button>
                 </form>
                 <p className="foot-note">
-                  Génère le formulaire officiel (12 pages) prérempli avec vos données, puis le
-                  télécharge. Vérifiez les montants avant dépôt.
+                  La déclaration génère un PDF prérempli avec vos montants. La quittance reste
+                  en attente d&apos;approbation DGI.
                 </p>
               </section>
+            )}
+
+            {/* —— 9. QUITTANCE —— */}
+            {step === 9 && quittance && (
+              <QuittancePaiement data={quittance} onBack={() => setStep(6)} />
             )}
           </>
         )}

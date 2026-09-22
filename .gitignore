@@ -9,3 +9,9 @@ frontend/dist/
 frontend/tsconfig.tsbuildinfo
 .DS_Store
 *.log
+
+# Ne pas versionner les PDF (gabarits, exports, spécimens)
+*.pdf
+backend/_fix*.py
+backend/_gen*.py
+backend/_test*.py

@@ -512,6 +512,7 @@ def pipeline_export(req: BuildFromScansRequest, user: dict[str, Any] = Depends(c
     )
     safe = "".join(c for c in (filled.profile.tax_id or "id") if c.isalnum() or c in "-_") or "id"
     out = EXPORTS / f"mensuelle_{filled.month.year}_{filled.month.month:02d}_{safe}.pdf"
+    # Toujours le gabarit officiel mensuelle2026.pdf, seulement prérempli.
     try:
         fill_official_pdf(filled, out)
     except Exception as exc:

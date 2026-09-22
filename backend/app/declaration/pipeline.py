@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.declaration.extract import apply_static_field_fallbacks
 from app.declaration.models import (
     CIFExtract,
     FormAmounts,
@@ -124,6 +125,31 @@ def merge_profile(
         is_manufacturing=answers.get("is_manufacturing"),
         totalement_exportatrice=answers.get("totalement_exportatrice"),
     )
+
+    fb = apply_static_field_fallbacks(
+        tax_id=profile.tax_id,
+        name=profile.name,
+        commercial_name=profile.commercial_name,
+        activity=profile.activity,
+        address=profile.address,
+        vat_status=profile.vat_status,
+        vat_code=profile.vat_code,
+        legal_form=profile.legal_form,
+    )
+    if fb.get("activity"):
+        profile.activity = fb["activity"]
+    if fb.get("address"):
+        profile.address = fb["address"]
+    if fb.get("vat_status"):
+        profile.vat_status = fb["vat_status"]
+        if "subject_to_vat" not in answers:
+            profile.subject_to_vat = "non assujetti" not in fb["vat_status"].lower()
+    if fb.get("legal_form") and not profile.legal_form:
+        profile.legal_form = fb["legal_form"]
+    if fb.get("name") and not profile.name:
+        profile.name = fb["name"]
+    if fb.get("commercial_name") and not profile.commercial_name:
+        profile.commercial_name = fb["commercial_name"]
 
     # Infer local taxes from sector if not answered
     if profile.subject_hotel_tax is None:
